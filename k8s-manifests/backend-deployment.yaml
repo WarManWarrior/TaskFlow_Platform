@@ -15,7 +15,7 @@ spec:
       containers:
         - name: backend
           # The pipeline will automatically update the tag at the end of this line!
-          image: YOUR_DOCKERHUB_USERNAME/taskflow-backend:GIT_COMMIT_HASH
+          image: sidelines/taskflow-backend:d6cb908
           ports:
             - containerPort: 8080
           env:
