@@ -36,20 +36,21 @@ jobs:
           push: ${{ github.event_name == 'push' }}
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-backend:latest
 
-      # --- NEW GITOPS STEPS BELOW ---
-
       # 1. We need a unique tag for the image based on the Git commit hash
       - name: Generate Image Tag
+        if: github.event_name == 'push'
         id: generate_tag
         run: echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       # 2. Update the Kubernetes manifest with the new image tag using 'sed'
       - name: Update Kubernetes Manifest
+        if: github.event_name == 'push'
         run: |
           sed -i "s|image: .*/taskflow-backend:.*|image: ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-backend:${{ env.IMAGE_TAG }}|g" k8s-manifests/backend-deployment.yaml
 
       # 3. Commit the change back to the GitHub repository
       - name: Commit and Push GitOps changes
+        if: github.event_name == 'push'
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
