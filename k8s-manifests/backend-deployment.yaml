@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskflow-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: taskflow-backend
+  template:
+    metadata:
+      labels:
+        app: taskflow-backend
+    spec:
+      containers:
+        - name: backend
+          # The pipeline will automatically update the tag at the end of this line!
+          image: YOUR_DOCKERHUB_USERNAME/taskflow-backend:GIT_COMMIT_HASH
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "prod"
