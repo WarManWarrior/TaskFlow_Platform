@@ -15,7 +15,7 @@ spec:
       containers:
         - name: backend
           # The pipeline will automatically update the tag at the end of this line!
-          image: sidelines/taskflow-backend:d6cb908
+          image: sidelines/taskflow-backend:latest
           ports:
             - containerPort: 8080
           env:
