@@ -8,11 +8,7 @@ spec:
   selector:
     matchLabels:
       app: taskflow-backend 
-  ignoreDifferences:
-    - group: apps
-      kind: Deployment
-      jsonPointers:
-        - /spec/replicas
+
 
   template:
     metadata:
