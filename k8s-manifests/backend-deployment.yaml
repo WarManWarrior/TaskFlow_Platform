@@ -7,7 +7,13 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: taskflow-backend
+      app: taskflow-backend 
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
   template:
     metadata:
       labels:
