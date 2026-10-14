@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write
 
+# Avoid concurrent main-branch builds racing to update the same GitOps manifests.
+concurrency:
+  group: taskflow-ci-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -60,13 +65,41 @@ jobs:
 
       - name: Commit and Push GitOps Changes
         if: github.event_name == 'push'
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
         run: |
+          set -e
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
+
+          # A duplicate or older run may finish building after another run has
+          # moved the branch. Inspect the current remote branch before editing.
+          git fetch origin "$TARGET_BRANCH"
+          git reset --hard "origin/$TARGET_BRANCH"
+
+          # Never roll GitOps backwards to an image from an older source commit.
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            if grep -Fq "taskflow-backend:$IMAGE_TAG" k8s-manifests/backend-deployment.yaml \
+              && grep -Fq "taskflow-frontend:$IMAGE_TAG" k8s-manifests/frontend-deployment.yaml; then
+              echo "This image tag is already recorded in both manifests; nothing to do."
+            else
+              echo "Branch advanced from $GITHUB_SHA while this build ran; skipping stale manifest update."
+            fi
+            exit 0
+          fi
+
+          sed -i "s|image: .*/taskflow-backend:.*|image: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/taskflow-backend:${{ env.IMAGE_TAG }}|" k8s-manifests/backend-deployment.yaml
+          sed -i "s|image: .*/taskflow-frontend:.*|image: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/taskflow-frontend:${{ env.IMAGE_TAG }}|" k8s-manifests/frontend-deployment.yaml
+
           git add k8s-manifests/backend-deployment.yaml k8s-manifests/frontend-deployment.yaml
-          if ! git diff --cached --quiet; then
-            git commit -m "cd: update frontend and backend image tags to ${{ env.IMAGE_TAG }} [skip ci]"
-            git push origin HEAD:${{ github.ref_name }}
-          else
-            echo "No manifest changes to commit."
+          if git diff --cached --quiet; then
+            echo "Both manifests already use image tag $IMAGE_TAG."
+            exit 0
+          fi
+
+          git commit -m "cd: update frontend and backend image tags to $IMAGE_TAG [skip ci]"
+          if ! git push origin "HEAD:$TARGET_BRANCH"; then
+            # Don't force-push or overwrite a concurrent remote update.
+            echo "The branch changed during the final push; rerun this workflow to reconcile GitOps."
+            exit 1
           fi
