@@ -129,6 +129,8 @@ export default function TeamsWorkspace({ notify = () => {} }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [busyIds, setBusyIds] = useState(() => new Set());
+  const busyTaskIdsRef = useRef(new Set());
+  const workspaceRequestsRef = useRef(new Set());
 
   const activeTeam = useMemo(() => teams.find((team) => String(team.id) === String(activeTeamId)) || null, [teams, activeTeamId]);
   const board = useMemo(() => STATUSES.map((status) => ({ ...status, tasks: tasks.filter((task) => String(task.status || "TODO").toUpperCase() === status.value) })), [tasks]);
@@ -148,30 +150,56 @@ export default function TeamsWorkspace({ notify = () => {} }) {
     }
   }, []);
 
-  const loadWorkspace = useCallback(async (teamId) => {
+  const loadWorkspace = useCallback(async (teamId, { silent = false } = {}) => {
     if (!teamId) return;
-    setLoadingWorkspace(true);
+    const teamKey = String(teamId);
+    if (workspaceRequestsRef.current.has(teamKey)) return;
+    workspaceRequestsRef.current.add(teamKey);
+    if (!silent) setLoadingWorkspace(true);
+
     try {
       const [taskResult, memberResult, activityResult] = await Promise.all([
         request(API + "/teams/" + teamId + "/tasks"),
         request(API + "/teams/" + teamId + "/members"),
         request(API + "/teams/" + teamId + "/activity"),
       ]);
-      setTasks(Array.isArray(taskResult) ? taskResult : []);
+
+      // Ignore responses from a team the user has switched away from.
+      if (String(activeTeamId) !== teamKey) return;
+
+      const incomingTasks = Array.isArray(taskResult) ? taskResult : [];
+      setTasks((current) => incomingTasks.map((incoming) => {
+        if (!busyTaskIdsRef.current.has(incoming.id)) return incoming;
+        return current.find((task) => String(task.id) === String(incoming.id)) || incoming;
+      }));
       setMembers(Array.isArray(memberResult) ? memberResult : []);
       setActivity(Array.isArray(activityResult) ? activityResult : []);
     } catch (e) {
-      setError(e.message || "Couldn't load this team's workspace.");
+      if (!silent && String(activeTeamId) === teamKey) {
+        setError(e.message || "Couldn't load this team's workspace.");
+      }
     } finally {
-      setLoadingWorkspace(false);
+      workspaceRequestsRef.current.delete(teamKey);
+      if (!silent && String(activeTeamId) === teamKey) setLoadingWorkspace(false);
     }
-  }, []);
+  }, [activeTeamId]);
 
   useEffect(() => { loadTeams(); }, [loadTeams]);
   useEffect(() => {
     if (activeTeamId) loadWorkspace(activeTeamId);
     else { setTasks([]); setMembers([]); setActivity([]); }
   }, [activeTeamId, loadWorkspace]);
+
+  // Quiet polling updates shared tasks, teammates, and recent activity without
+  // showing skeletons or resetting the board. Stop while the chat tab is active.
+  useEffect(() => {
+    if (!activeTeamId || activeTab !== "tasks") return undefined;
+    const teamId = activeTeamId;
+    const timer = window.setInterval(() => {
+      loadWorkspace(teamId, { silent: true });
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [activeTeamId, activeTab, loadWorkspace]);
 
   useEffect(() => {
     if (!selectedTask || !activeTeamId) return;
@@ -311,6 +339,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
 
   async function updateStatus(task, status) {
     if (!activeTeamId || busyIds.has(task.id) || status === task.status) return;
+    busyTaskIdsRef.current.add(task.id);
     setBusyIds((current) => new Set(current).add(task.id));
     try {
       const updated = await request(API + "/teams/" + activeTeamId + "/tasks/" + task.id, { method: "PATCH", body: { status } });
@@ -319,7 +348,10 @@ export default function TeamsWorkspace({ notify = () => {} }) {
       setActivity(Array.isArray(feed) ? feed : []);
       notify("Shared task status updated.");
     } catch (e) { notify(e.message || "Couldn't update that task.", "error"); }
-    finally { setBusyIds((current) => { const next = new Set(current); next.delete(task.id); return next; }); }
+    finally {
+      busyTaskIdsRef.current.delete(task.id);
+      setBusyIds((current) => { const next = new Set(current); next.delete(task.id); return next; });
+    }
   }
 
   async function postComment(event) {
@@ -371,7 +403,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
 
           {activeTab === "tasks" ? <>
             <section className="team-shared-board">
-              <div className="team-section-heading"><div><div className="team-section-kicker">IN SYNC</div><h3>Shared task board <span className="board-total">{tasks.length}</span></h3><p>Task changes and comments show who made each contribution.</p></div><div className="team-board-actions"><button className="secondary-button" disabled={loadingWorkspace} onClick={() => loadWorkspace(activeTeam.id)}>↻ Refresh</button><button className="primary-button" onClick={() => { setError(""); setTaskTitle(""); setTaskDescription(""); setTaskDialog(true); }}>＋ Shared task</button></div></div>
+              <div className="team-section-heading"><div><div className="team-section-kicker">IN SYNC</div><h3>Shared task board <span className="board-total">{tasks.length}</span></h3><p>Tasks and activity refresh automatically every 5 seconds.</p></div><div className="team-board-actions"><button className="secondary-button" disabled={loadingWorkspace} onClick={() => loadWorkspace(activeTeam.id)}>↻ Refresh</button><button className="primary-button" onClick={() => { setError(""); setTaskTitle(""); setTaskDescription(""); setTaskDialog(true); }}>＋ Shared task</button></div></div>
 
               <div className="kanban-grid team-kanban-grid">{board.map((column) => <section className={"kanban-column column-" + column.tone} key={column.value}>
                 <div className="column-heading"><div className="column-title-group"><span className={"column-status-dot " + column.tone}><span className="status-indicator" /></span><h3>{column.label}</h3><span className="column-count">{column.tasks.length}</span></div></div>
