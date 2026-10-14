@@ -105,3 +105,7 @@
 @media(max-width:540px){.team-view-tabs{width:100%}.team-view-tabs button{flex:1;justify-content:center;padding-inline:7px;font-size:9px}.team-chat-header{padding:13px}.team-chat-header p{font-size:8.5px}.team-chat-message-main{max-width:calc(100% - 48px)}.team-chat-message-meta{gap:6px}.team-chat-message-meta time{font-size:7.5px}.team-chat-composer textarea{font-size:10px;padding:9px}.team-chat-footnote{font-size:7px}}
 
 .profile-avatar img{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+
+/* Keep chat scrolling inside its own message viewport, never the document. */
+.team-chat-panel{min-height:0;min-width:0;contain:layout paint}
+.team-chat-messages{min-height:0;overscroll-behavior-y:contain;overscroll-behavior-x:none;scroll-behavior:auto;overflow-anchor:auto;overflow-x:hidden;flex:1 1 auto}

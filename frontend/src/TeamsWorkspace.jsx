@@ -58,8 +58,59 @@ export default function TeamsWorkspace({ notify = () => {} }) {
   const [chatLoading, setChatLoading] = useState(false);
   const [chatSending, setChatSending] = useState(false);
   const [chatError, setChatError] = useState("");
-  const chatEndRef = useRef(null);
+  const chatContainerRef = useRef(null);
+  const chatMessagesRef = useRef([]);
+  const chatActiveTeamRef = useRef(null);
+  const chatPollInFlightRef = useRef(false);
+  const shouldFollowChatRef = useRef(false);
   const chatFileRef = useRef(null);
+
+  function updateChatMessages(nextMessages, forceFollow = false) {
+    const current = chatMessagesRef.current;
+    const signature = (items) => JSON.stringify(items.map((item) => ({
+      id: item.id,
+      message: item.message,
+      imageUrl: item.imageUrl,
+      imageName: item.imageName,
+      createdAt: item.createdAt,
+      senderId: item.sender?.id,
+      senderName: item.sender?.name,
+      senderAvatarUrl: item.sender?.avatarUrl,
+      senderColor: item.sender?.avatarColor
+    })));
+
+    if (signature(current) === signature(nextMessages)) {
+      if (forceFollow) shouldFollowChatRef.current = true;
+      return;
+    }
+
+    const container = chatContainerRef.current;
+    const nearBottom = !container ||
+      container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+    shouldFollowChatRef.current = forceFollow || nearBottom;
+    chatMessagesRef.current = nextMessages;
+    setChatMessages(nextMessages);
+  }
+
+  const refreshChatMessages = useCallback(async (teamId, initial = false) => {
+    if (!teamId || chatPollInFlightRef.current) return;
+    chatPollInFlightRef.current = true;
+    if (initial) setChatLoading(true);
+
+    try {
+      const result = await request(API + "/teams/" + teamId + "/messages");
+      if (String(chatActiveTeamRef.current) !== String(teamId)) return;
+      updateChatMessages(Array.isArray(result) ? result : [], initial);
+      setChatError("");
+    } catch (e) {
+      if (String(chatActiveTeamRef.current) === String(teamId)) {
+        setChatError(e.message || "Couldn't load team chat.");
+      }
+    } finally {
+      chatPollInFlightRef.current = false;
+      if (initial && String(chatActiveTeamRef.current) === String(teamId)) setChatLoading(false);
+    }
+  }, []);
   const [activeTeamId, setActiveTeamId] = useState(null);
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -138,28 +189,35 @@ export default function TeamsWorkspace({ notify = () => {} }) {
 
   useEffect(() => {
     if (!activeTeamId || activeTab !== "chat") {
-      if (!activeTeamId) setChatMessages([]);
+      chatActiveTeamRef.current = null;
+      if (!activeTeamId) {
+        chatMessagesRef.current = [];
+        setChatMessages([]);
+      }
       return undefined;
     }
-    let cancelled = false;
-    const pull = async (initial = false) => {
-      try {
-        if (initial) setChatLoading(true);
-        const result = await request(API + "/teams/" + activeTeamId + "/messages");
-        if (!cancelled) { setChatMessages(Array.isArray(result) ? result : []); setChatError(""); }
-      } catch (e) {
-        if (!cancelled) setChatError(e.message || "Couldn't load team chat.");
-      } finally {
-        if (initial && !cancelled) setChatLoading(false);
+
+    chatActiveTeamRef.current = activeTeamId;
+    chatMessagesRef.current = [];
+    setChatMessages([]);
+    shouldFollowChatRef.current = true;
+    refreshChatMessages(activeTeamId, true);
+
+    // Poll every second. The in-flight guard prevents overlapping network requests.
+    const timer = window.setInterval(() => refreshChatMessages(activeTeamId, false), 1000);
+    return () => {
+      window.clearInterval(timer);
+      if (String(chatActiveTeamRef.current) === String(activeTeamId)) {
+        chatActiveTeamRef.current = null;
       }
     };
-    pull(true);
-    const timer = window.setInterval(() => pull(false), 5000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [activeTeamId, activeTab]);
+  }, [activeTeamId, activeTab, refreshChatMessages]);
 
   useEffect(() => {
-    if (activeTab === "chat") chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (activeTab !== "chat" || !shouldFollowChatRef.current) return;
+    const container = chatContainerRef.current;
+    if (container) container.scrollTop = container.scrollHeight;
+    shouldFollowChatRef.current = false;
   }, [chatMessages, activeTab]);
 
   async function selectChatImage(event) {
@@ -187,7 +245,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
         method: "POST",
         body: { message, imageData: chatImageData || null, imageName: chatImageName || null },
       });
-      setChatMessages((current) => current.some((item) => item.id === saved.id) ? current : [...current, saved]);
+      updateChatMessages([...chatMessagesRef.current.filter((item) => item.id !== saved.id), saved], true);
       setChatDraft("");
       setChatImageData("");
       setChatImageName("");
@@ -335,9 +393,9 @@ export default function TeamsWorkspace({ notify = () => {} }) {
               {activity.length === 0 ? <div className="activity-empty">Team activity will appear here as you work together.</div> : <div className="team-activity-list">{activity.map((item) => <article className="team-activity-item" key={item.id} style={{ "--actor-color": item.actor?.avatarColor || "var(--purple)" }}><Avatar user={item.actor} size={34} /><div className="team-activity-copy"><div><strong>{item.actor?.name || "Teammate"}</strong> <span>{item.detail}</span></div><small>{item.taskTitle} · {item.createdAt ? new Date(item.createdAt).toLocaleString() : ""}</small></div></article>)}</div>}
             </section>
           </> : <section className="team-chat-panel">
-            <header className="team-chat-header"><div className="team-chat-mark">◌</div><div><div className="team-section-kicker">TEAM CONVERSATION</div><h3>{activeTeam.name} chat</h3><p>Every teammate in this team can read and reply. New messages refresh automatically.</p></div><button type="button" className="secondary-button" disabled={chatLoading} onClick={() => { setChatLoading(true); request(API + "/teams/" + activeTeam.id + "/messages").then((result) => setChatMessages(Array.isArray(result) ? result : [])).catch((e) => setChatError(e.message || "Couldn't refresh messages.")).finally(() => setChatLoading(false)); }}>↻ Refresh</button></header>
+            <header className="team-chat-header"><div className="team-chat-mark">◌</div><div><div className="team-section-kicker">TEAM CONVERSATION</div><h3>{activeTeam.name} chat</h3><p>Every teammate in this team can read and reply. New messages refresh automatically.</p></div><button type="button" className="secondary-button" disabled={chatLoading} onClick={() => refreshChatMessages(activeTeam.id, true)}>↻ Refresh</button></header>
             {chatError && <div className="team-error" role="alert"><span>{chatError}</span><button type="button" onClick={() => setChatError("")} aria-label="Dismiss chat error">×</button></div>}
-            <div className="team-chat-messages" aria-live="polite" aria-busy={chatLoading}>
+            <div ref={chatContainerRef} className="team-chat-messages" aria-live="polite" aria-busy={chatLoading}>
               {chatLoading && chatMessages.length === 0 ? <div className="chat-empty-state">Loading your team's conversation…</div> : chatMessages.length === 0 ? <div className="chat-empty-state"><div className="chat-empty-icon">✉</div><strong>It's quiet in here.</strong><p>Say hello, share an update, or send an image to start the conversation.</p></div> : chatMessages.map((message) => <article className="team-chat-message" key={message.id} style={{ "--actor-color": message.sender?.avatarColor || "var(--purple)" }}>
                 <Avatar user={message.sender} size={39} />
                 <div className="team-chat-message-main">
@@ -346,7 +404,6 @@ export default function TeamsWorkspace({ notify = () => {} }) {
                   {message.imageUrl && <a className="team-chat-image-link" href={message.imageUrl} target="_blank" rel="noreferrer" title="Open image in a new tab"><img src={message.imageUrl} alt={message.imageName || "Image shared with the team"} loading="lazy" /><span>{message.imageName || "Shared image"} · Open image</span></a>}
                 </div>
               </article>)}
-              <div ref={chatEndRef} />
             </div>
             {chatImageData && <div className="chat-image-pending"><img src={chatImageData} alt="Image ready to send" /><div><strong>{chatImageName || "Image attachment"}</strong><small>Ready to share with this team</small></div><button type="button" title="Remove attachment" aria-label="Remove image attachment" onClick={() => { setChatImageData(""); setChatImageName(""); }}>×</button></div>}
             <form className="team-chat-composer" onSubmit={sendChatMessage}>
