@@ -2,6 +2,7 @@ package com.example.demo.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "tasks")
@@ -14,6 +15,18 @@ public class Task {
     // Nullable to preserve legacy records; the first registered account adopts them.
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "user_id") @JsonIgnore
     private AppUser user;
+    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "team_id") @JsonIgnore
+    private Team team;
+    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "updated_by_id") @JsonIgnore
+    private AppUser updatedBy;
+    @Column(name = "created_at") private LocalDateTime createdAt;
+    @Column(name = "updated_at") private LocalDateTime updatedAt;
+    @PrePersist protected void onCreate() {
+        LocalDateTime now = LocalDateTime.now();
+        if (createdAt == null) createdAt = now;
+        if (updatedAt == null) updatedAt = now;
+    }
+    @PreUpdate protected void onUpdate() { updatedAt = LocalDateTime.now(); }
 
     public Task() {}
     public Task(String title, String description, String status) { this.title = title; this.description = description; this.status = status; }
@@ -25,6 +38,12 @@ public class Task {
     public void setDescription(String description) { this.description = description; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public Team getTeam() { return team; }
+    public void setTeam(Team team) { this.team = team; }
+    public AppUser getUpdatedBy() { return updatedBy; }
+    public void setUpdatedBy(AppUser updatedBy) { this.updatedBy = updatedBy; }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
     public AppUser getUser() { return user; }
     public void setUser(AppUser user) { this.user = user; }
 }

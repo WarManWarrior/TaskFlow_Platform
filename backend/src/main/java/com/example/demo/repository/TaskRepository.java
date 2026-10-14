@@ -10,8 +10,10 @@ import java.util.List;
 import java.util.Optional;
 
 public interface TaskRepository extends JpaRepository<Task, Long> {
-    List<Task> findAllByUser_IdOrderByIdDesc(Long userId);
-    Optional<Task> findByIdAndUser_Id(Long id, Long userId);
+    List<Task> findAllByUser_IdAndTeamIsNullOrderByIdDesc(Long userId);
+    Optional<Task> findByIdAndUser_IdAndTeamIsNull(Long id, Long userId);
+    List<Task> findAllByTeam_IdOrderByCreatedAtDesc(Long teamId);
+    Optional<Task> findByIdAndTeam_Id(Long id, Long teamId);
     @Modifying
     @Query("update Task task set task.user = :user where task.user is null")
     int assignUnownedTasksToUser(@Param("user") AppUser user);

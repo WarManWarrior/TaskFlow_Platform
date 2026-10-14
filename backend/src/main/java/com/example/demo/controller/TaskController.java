@@ -24,7 +24,7 @@ public class TaskController {
 
     @GetMapping
     public List<Task> getAllTasks(Authentication authentication) {
-        return tasks.findAllByUser_IdOrderByIdDesc(currentUser(authentication).getId());
+        return tasks.findAllByUser_IdAndTeamIsNullOrderByIdDesc(currentUser(authentication).getId());
     }
 
     @PostMapping
@@ -38,7 +38,9 @@ public class TaskController {
         }
         if (task.getStatus() == null || task.getStatus().isBlank()) task.setStatus("TODO");
         else if (!ALLOWED_STATUSES.contains(task.getStatus())) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Status must be TODO, IN_PROGRESS, or DONE.");
-        task.setUser(currentUser(authentication));
+        AppUser actor = currentUser(authentication);
+        task.setUser(actor);
+        task.setUpdatedBy(actor);
         return tasks.save(task);
     }
 
@@ -47,15 +49,16 @@ public class TaskController {
         String status = updates.get("status");
         if (status == null || !ALLOWED_STATUSES.contains(status)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Status must be TODO, IN_PROGRESS, or DONE.");
         AppUser owner = currentUser(authentication);
-        Task task = tasks.findByIdAndUser_Id(id, owner.getId()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found."));
+        Task task = tasks.findByIdAndUser_IdAndTeamIsNull(id, owner.getId()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found."));
         task.setStatus(status);
+        task.setUpdatedBy(owner);
         return tasks.save(task);
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteTask(@PathVariable Long id, Authentication authentication) {
         AppUser owner = currentUser(authentication);
-        Task task = tasks.findByIdAndUser_Id(id, owner.getId()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found."));
+        Task task = tasks.findByIdAndUser_IdAndTeamIsNull(id, owner.getId()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found."));
         tasks.delete(task);
         return ResponseEntity.noContent().build();
     }

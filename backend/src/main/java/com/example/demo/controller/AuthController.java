@@ -99,6 +99,15 @@ public class AuthController {
         String name = trim(body.get("name"));
         if (name.isBlank() || name.length() > 80) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name must be between 1 and 80 characters.");
         user.setName(name);
+        String avatarUrl = trim(body.get("avatarUrl"));
+        if (!avatarUrl.isBlank()) {
+            if (avatarUrl.length() > 500 || !(avatarUrl.startsWith("https://") || avatarUrl.startsWith("http://"))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Profile image must be an HTTP or HTTPS image URL no longer than 500 characters.");
+            }
+            user.setAvatarUrl(avatarUrl);
+        } else {
+            user.setAvatarUrl(null);
+        }
         return authResponse(users.save(user));
     }
 
