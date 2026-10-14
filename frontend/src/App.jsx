@@ -202,7 +202,7 @@ function App() {
     setIsProfileSaving(true); setProfileError("");
     try {
       const result = await apiRequest(API + "/auth/profile", { method: "PATCH", body: { name: cleaned } });
-      setUser(result.user); setProfileName(result.user.name); closeProfileModal(); notify("Your profile has been updated.");
+      setUser(result.user); setProfileName(result.user.name); setIsProfileOpen(false); setActivePage("overview"); notify("Your profile has been updated.");
     } catch (error) { setProfileError(error.message || "Couldn't update your profile."); }
     finally { setIsProfileSaving(false); }
   }
@@ -290,7 +290,7 @@ function App() {
         <div className="nav-section-label">WORKSPACE</div>
         <nav className="primary-nav" aria-label="Main navigation"><button className={"nav-link" + (activePage === "overview" ? " active" : "")} onClick={() => navigateTo("overview")}><Icon name="grid" /><span>Overview</span>{activePage === "overview" && <span className="nav-indicator" />}</button><button className={"nav-link" + (activePage === "tasks" ? " active" : "")} onClick={() => navigateTo("tasks")}><Icon name="list" /><span>My tasks</span><span className="nav-count">{tasks.length}</span></button><button className={"nav-link" + (activePage === "account" ? " active" : "")} onClick={() => navigateTo("account")}><Icon name="user" /><span>Account</span></button></nav>
         <div className="nav-section-label nav-space">YOUR FOCUS</div><div className="focus-card"><span className="focus-icon"><Icon name="spark" size={17} /></span><strong>One thing at a time.</strong><p>Progress comes from the little things you finish today.</p><div className="focus-progress"><span style={{ width: completion + "%" }} /></div><small>{completion}% of tasks completed</small></div>
-        <div className="sidebar-bottom"><button className="online-status" onClick={loadTasks} title="Refresh tasks and check connection"><span className="online-dot" /><span>{isLoading ? "Refreshing workspace…" : "Workspace connected"}</span><Icon name="refresh" size={14} className={isLoading ? "spin-icon" : ""} /></button><div className="profile-row"><div className="profile-avatar">{firstName.slice(0, 1).toUpperCase()}</div><div className="profile-copy"><strong>{user.name}</strong><small>{user.email}</small></div><button className="icon-button profile-action" aria-label="Open account menu" onClick={() => setIsAccountMenuOpen((current) => !current)}><Icon name="chevron" size={17} /></button></div></div>
+        <div className="sidebar-bottom"><button className="online-status" onClick={loadTasks} title="Refresh tasks and check connection"><span className="online-dot" /><span>{isLoading ? "Refreshing workspace…" : "Workspace connected"}</span><Icon name="refresh" size={14} className={isLoading ? "spin-icon" : ""} /></button><div className="profile-row"><div className="profile-avatar">{firstName.slice(0, 1).toUpperCase()}</div><div className="profile-copy"><strong>{user.name}</strong><small>{user.email}</small></div><button className="icon-button profile-action" aria-label="Open profile settings" onClick={() => navigateTo("account")}><Icon name="chevron" size={17} /></button></div></div>
       </aside>
 
       <main className="main-area">
