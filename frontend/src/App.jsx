@@ -52,7 +52,7 @@ async function apiRequest(path, options = {}) {
   const response = await fetch(path, { method, credentials: "same-origin", headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
   if (response.status === 204) return null;
   let payload = null;
-  if ((response.headers.get("content-type") || "").includes("application/json")) payload = await response.json().catch(() => null);
+  if ((response.headers.get("content-type") || "").includes("json")) payload = await response.json().catch(() => null);
   else { const text = await response.text().catch(() => ""); payload = text ? { detail: text } : null; }
   if (!response.ok) {
     const error = new Error((payload && (payload.detail || payload.message || payload.error)) || (response.status === 401 ? "Please sign in to continue." : "Request failed. Please try again."));
