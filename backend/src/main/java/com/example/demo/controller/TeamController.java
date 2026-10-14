@@ -3,12 +3,18 @@ package com.example.demo.controller;
 import com.example.demo.model.*;
 import com.example.demo.repository.*;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import java.security.SecureRandom;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.Base64;
 
 @RestController
 @RequestMapping("/api/teams")
@@ -16,6 +22,8 @@ public class TeamController {
     private static final Set<String> STATUSES = Set.of("TODO", "IN_PROGRESS", "DONE");
     private static final String ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final String[] COLORS = {"#9B8AFB","#F59E0B","#34D399","#60A5FA","#F472B6","#FB7185","#22D3EE","#A3E635","#C084FC","#F97316"};
+    private static final String[] ANIMAL_AVATARS = {"/avatars/doodle-fox.svg","/avatars/doodle-cat.svg","/avatars/doodle-dog.svg","/avatars/doodle-rabbit.svg","/avatars/doodle-panda.svg","/avatars/doodle-penguin.svg","/avatars/doodle-frog.svg","/avatars/doodle-raccoon.svg"};
+    private static final Pattern IMAGE_DATA_URL = Pattern.compile("^data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$");
     private static final SecureRandom RANDOM = new SecureRandom();
     private final AppUserRepository users;
     private final TeamRepository teams;
@@ -23,9 +31,10 @@ public class TeamController {
     private final TaskRepository tasks;
     private final TaskCommentRepository comments;
     private final TaskActivityRepository activities;
+    private final ChatMessageRepository chatMessages;
 
-    public TeamController(AppUserRepository users, TeamRepository teams, TeamMemberRepository members, TaskRepository tasks, TaskCommentRepository comments, TaskActivityRepository activities) {
-        this.users=users; this.teams=teams; this.members=members; this.tasks=tasks; this.comments=comments; this.activities=activities;
+    public TeamController(AppUserRepository users, TeamRepository teams, TeamMemberRepository members, TaskRepository tasks, TaskCommentRepository comments, TaskActivityRepository activities, ChatMessageRepository chatMessages) {
+        this.users=users; this.teams=teams; this.members=members; this.tasks=tasks; this.comments=comments; this.activities=activities; this.chatMessages=chatMessages;
     }
 
     @GetMapping @Transactional(readOnly=true)
@@ -109,6 +118,80 @@ public class TeamController {
         }).toList();
     }
 
+
+    @GetMapping("/{teamId}/messages")
+    @Transactional(readOnly = true)
+    public List<Map<String,Object>> getChatMessages(@PathVariable Long teamId, Authentication auth) {
+        requireMembership(teamId, currentUser(auth));
+        return chatMessages.findTop100ByTeam_IdOrderByCreatedAtDesc(teamId).stream()
+            .sorted(Comparator.comparing(ChatMessage::getCreatedAt))
+            .map(message -> chatMessageMap(teamId, message)).toList();
+    }
+
+    @PostMapping("/{teamId}/messages")
+    @Transactional
+    public Map<String,Object> sendChatMessage(@PathVariable Long teamId, @RequestBody Map<String,String> body, Authentication auth) {
+        AppUser sender = currentUser(auth);
+        Team team = requireMembership(teamId, sender);
+        String text = trim(body.get("message"));
+        String imageData = body.get("imageData");
+        if (text.length() > 2000) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Chat messages must be 2,000 characters or fewer.");
+        if (imageData != null && !imageData.isBlank()) {
+            if (imageData.length() > 2_800_000) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Images must be 2 MB or smaller after compression.");
+            Matcher matcher = IMAGE_DATA_URL.matcher(imageData);
+            if (!matcher.matches()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Upload a PNG, JPG, or WebP image.");
+            try {
+                byte[] data = Base64.getDecoder().decode(matcher.group(2));
+                if (data.length > 2 * 1024 * 1024) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Images must be 2 MB or smaller after compression.");
+            } catch (IllegalArgumentException ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That image could not be read.");
+            }
+        } else {
+            imageData = null;
+        }
+        if (text.isBlank() && imageData == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Write a message or attach an image.");
+        String imageName = imageData == null ? null : safeImageName(body.get("imageName"));
+        ChatMessage message = chatMessages.save(new ChatMessage(team, sender, text, imageData, imageName));
+        return chatMessageMap(teamId, message);
+    }
+
+    @GetMapping("/{teamId}/messages/{messageId}/image")
+    @Transactional(readOnly = true)
+    public ResponseEntity<byte[]> getChatImage(@PathVariable Long teamId, @PathVariable Long messageId, Authentication auth) {
+        requireMembership(teamId, currentUser(auth));
+        ChatMessage message = chatMessages.findByIdAndTeam_Id(messageId, teamId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Chat image not found."));
+        String imageData = message.getImageData();
+        Matcher matcher = imageData == null ? IMAGE_DATA_URL.matcher("") : IMAGE_DATA_URL.matcher(imageData);
+        if (imageData == null || !matcher.matches()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Chat image not found.");
+        byte[] bytes;
+        try { bytes = Base64.getDecoder().decode(matcher.group(2)); }
+        catch (IllegalArgumentException ex) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Chat image is invalid."); }
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300")
+            .contentType(MediaType.parseMediaType(matcher.group(1)))
+            .body(bytes);
+    }
+
+    private Map<String,Object> chatMessageMap(Long teamId, ChatMessage message) {
+        Map<String,Object> item = new LinkedHashMap<>();
+        item.put("id", message.getId());
+        item.put("message", message.getMessage());
+        item.put("imageName", message.getImageName() == null ? "" : message.getImageName());
+        item.put("imageUrl", message.getImageData() == null ? "" : "/api/teams/" + teamId + "/messages/" + message.getId() + "/image");
+        item.put("createdAt", time(message.getCreatedAt()));
+        item.put("sender", userMap(message.getSender()));
+        return item;
+    }
+
+    private String safeImageName(String supplied) {
+        if (supplied == null || supplied.isBlank()) return "shared-image";
+        String name = supplied.replace('\\', '/');
+        name = name.substring(name.lastIndexOf('/') + 1).replaceAll("[^A-Za-z0-9._ -]", "_").trim();
+        if (name.isBlank()) return "shared-image";
+        return name.substring(0, Math.min(name.length(), 160));
+    }
+
     private Team requireMembership(Long id,AppUser user) {
         Team team=teams.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Team not found."));
         if(!members.existsByTeam_IdAndUser_Id(id,user.getId())) throw new ResponseStatusException(HttpStatus.FORBIDDEN,"Join this team to access it.");
@@ -136,7 +219,13 @@ public class TeamController {
     private Map<String,Object> userMap(AppUser u) {
         if(u==null)return null; int index=Math.floorMod(u.getId()==null?0:u.getId().intValue(),COLORS.length);
         Map<String,Object> m=new LinkedHashMap<>(); m.put("id",u.getId()); m.put("name",u.getName()); m.put("email",u.getEmail());
-        m.put("avatarUrl",u.getAvatarUrl()==null?"":u.getAvatarUrl()); m.put("avatarColor",COLORS[index]); return m;
+        m.put("avatarUrl",effectiveAvatarUrl(u)); m.put("avatarColor",COLORS[index]); return m;
+    }
+    private String effectiveAvatarUrl(AppUser user) {
+        String saved = user.getAvatarUrl();
+        if (saved != null && saved.startsWith("data:image/")) return "/api/auth/avatar/" + user.getId();
+        if (saved != null && !saved.isBlank()) return saved;
+        return ANIMAL_AVATARS[Math.floorMod(user.getId() == null ? 0 : user.getId().intValue(), ANIMAL_AVATARS.length)];
     }
     private String generateCode() {
         for(int n=0;n<20;n++) {

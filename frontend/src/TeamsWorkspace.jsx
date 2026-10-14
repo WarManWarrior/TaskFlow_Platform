@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { imageFileToDataUrl } from "./imageUtils";
 
 const API = "/api";
 const STATUSES = [
@@ -49,6 +50,16 @@ function initials(name) {
 
 export default function TeamsWorkspace({ notify = () => {} }) {
   const [teams, setTeams] = useState([]);
+  const [activeTab, setActiveTab] = useState("tasks");
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatImageData, setChatImageData] = useState("");
+  const [chatImageName, setChatImageName] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatError, setChatError] = useState("");
+  const chatEndRef = useRef(null);
+  const chatFileRef = useRef(null);
   const [activeTeamId, setActiveTeamId] = useState(null);
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -124,6 +135,68 @@ export default function TeamsWorkspace({ notify = () => {} }) {
     })();
     return () => { cancelled = true; };
   }, [selectedTask?.id, activeTeamId, notify]);
+
+  useEffect(() => {
+    if (!activeTeamId || activeTab !== "chat") {
+      if (!activeTeamId) setChatMessages([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const pull = async (initial = false) => {
+      try {
+        if (initial) setChatLoading(true);
+        const result = await request(API + "/teams/" + activeTeamId + "/messages");
+        if (!cancelled) { setChatMessages(Array.isArray(result) ? result : []); setChatError(""); }
+      } catch (e) {
+        if (!cancelled) setChatError(e.message || "Couldn't load team chat.");
+      } finally {
+        if (initial && !cancelled) setChatLoading(false);
+      }
+    };
+    pull(true);
+    const timer = window.setInterval(() => pull(false), 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [activeTeamId, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === "chat") chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [chatMessages, activeTab]);
+
+  async function selectChatImage(event) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setChatError("");
+    try {
+      const imageData = await imageFileToDataUrl(file, { maxDimension: 1600, maxDataUrlChars: 2750000, maxFileSize: 10 * 1024 * 1024 });
+      setChatImageData(imageData);
+      setChatImageName(file.name.slice(0, 160));
+    } catch (e) {
+      setChatError(e.message || "Couldn't attach that image.");
+    }
+  }
+
+  async function sendChatMessage(event) {
+    event.preventDefault();
+    const message = chatDraft.trim();
+    if ((!message && !chatImageData) || !activeTeamId || chatSending) return;
+    setChatSending(true);
+    setChatError("");
+    try {
+      const saved = await request(API + "/teams/" + activeTeamId + "/messages", {
+        method: "POST",
+        body: { message, imageData: chatImageData || null, imageName: chatImageName || null },
+      });
+      setChatMessages((current) => current.some((item) => item.id === saved.id) ? current : [...current, saved]);
+      setChatDraft("");
+      setChatImageData("");
+      setChatImageName("");
+    } catch (e) {
+      setChatError(e.message || "Couldn't send your message.");
+    } finally {
+      setChatSending(false);
+    }
+  }
 
   async function createTeam(event) {
     event.preventDefault();
@@ -233,29 +306,57 @@ export default function TeamsWorkspace({ notify = () => {} }) {
 
           <section className="team-members-strip"><div><div className="team-section-kicker">THE PEOPLE</div><h3>Your teammates</h3></div><div className="team-member-stack">{members.map((member) => <span className="team-member-person" key={member.user.id}><Avatar user={member.user} size={36} /><span>{member.user.name}</span><small>{member.role.toLowerCase()}</small></span>)}</div></section>
 
-          <section className="team-shared-board">
-            <div className="team-section-heading"><div><div className="team-section-kicker">IN SYNC</div><h3>Shared task board <span className="board-total">{tasks.length}</span></h3><p>Task changes and comments show who made each contribution.</p></div><div className="team-board-actions"><button className="secondary-button" disabled={loadingWorkspace} onClick={() => loadWorkspace(activeTeam.id)}>↻ Refresh</button><button className="primary-button" onClick={() => { setError(""); setTaskTitle(""); setTaskDescription(""); setTaskDialog(true); }}>＋ Shared task</button></div></div>
+          <div className="team-view-tabs" role="tablist" aria-label="Team workspace">
+            <button type="button" role="tab" aria-selected={activeTab === "tasks"} className={activeTab === "tasks" ? "active" : ""} onClick={() => setActiveTab("tasks")}>▦ Shared tasks <span>{tasks.length}</span></button>
+            <button type="button" role="tab" aria-selected={activeTab === "chat"} className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>◌ Team chat <span>{members.length}</span></button>
+          </div>
 
-            <div className="kanban-grid team-kanban-grid">{board.map((column) => <section className={"kanban-column column-" + column.tone} key={column.value}>
-              <div className="column-heading"><div className="column-title-group"><span className={"column-status-dot " + column.tone}><span className="status-indicator" /></span><h3>{column.label}</h3><span className="column-count">{column.tasks.length}</span></div></div>
-              <div className="task-stack">{loadingWorkspace ? <div className="task-skeleton" /> : column.tasks.length === 0 ? <div className="column-empty"><span className="column-empty-icon">○</span><p>No shared tasks here yet.</p></div> : column.tasks.map((task) => {
-                const actor = task.updatedBy || task.createdBy;
-                const busy = busyIds.has(task.id);
-                return <article className="task-card team-task-card" key={task.id} style={{ "--actor-color": actor?.avatarColor || "var(--purple)" }}>
-                  <div className="task-card-top"><span className="task-id">TEAM-{String(task.id).padStart(3,"0")}</span><button className="discussion-button" onClick={() => { setSelectedTask(task); setComments([]); setCommentDraft(""); }}>Comment ({comments.length && selectedTask?.id === task.id ? comments.length : "view"})</button></div>
-                  <h4>{task.title}</h4><p className={"task-description" + (!task.description ? " no-description" : "")}>{task.description || "No description added."}</p>
-                  <div className="team-task-activity-tag"><Avatar user={actor} size={25} /><span><strong>{actor?.name || "Team member"}</strong><small>{task.updatedAt ? new Date(task.updatedAt).toLocaleString() : "Task created"}</small></span></div>
-                  <div className="task-card-bottom"><span className={"task-status-label " + column.tone}><span className="status-indicator" />{column.label}</span><label className="status-select-wrap"><span className="visually-hidden">Change status for {task.title}</span><select aria-label={"Change status for " + task.title} value={String(task.status || "TODO").toUpperCase()} disabled={busy} onChange={(event) => updateStatus(task,event.target.value)}>{STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select><span className="status-chevron">⌄</span></label></div>
-                </article>;
-              })}</div>
-              {column.value === "TODO" && <button className="add-card-button" onClick={() => { setTaskTitle(""); setTaskDescription(""); setTaskDialog(true); }}>＋ Add shared task</button>}
-            </section>)}</div>
-          </section>
+          {activeTab === "tasks" ? <>
+            <section className="team-shared-board">
+              <div className="team-section-heading"><div><div className="team-section-kicker">IN SYNC</div><h3>Shared task board <span className="board-total">{tasks.length}</span></h3><p>Task changes and comments show who made each contribution.</p></div><div className="team-board-actions"><button className="secondary-button" disabled={loadingWorkspace} onClick={() => loadWorkspace(activeTeam.id)}>↻ Refresh</button><button className="primary-button" onClick={() => { setError(""); setTaskTitle(""); setTaskDescription(""); setTaskDialog(true); }}>＋ Shared task</button></div></div>
 
-          <section className="team-activity-panel"><div className="team-section-kicker">TEAM PULSE</div><h3>Recent activity</h3><p>Task updates and comments, with the contributor shown by avatar and color.</p>
-            {activity.length === 0 ? <div className="activity-empty">Team activity will appear here as you work together.</div> : <div className="team-activity-list">{activity.map((item) => <article className="team-activity-item" key={item.id} style={{ "--actor-color": item.actor?.avatarColor || "var(--purple)" }}><Avatar user={item.actor} size={34} /><div className="team-activity-copy"><div><strong>{item.actor?.name || "Teammate"}</strong> <span>{item.detail}</span></div><small>{item.taskTitle} · {item.createdAt ? new Date(item.createdAt).toLocaleString() : ""}</small></div></article>)}</div>}
-          </section>
-        </div> : <div className="team-no-selection"><div className="team-empty-mark">✳</div><h2>Make space for teamwork.</h2><p>Create a team and invite people with its unique code, or join a team using a code from a teammate.</p><div><button className="primary-button" onClick={() => { setTeamDialog("create"); setError(""); }}>＋ Create team</button><button className="secondary-button" onClick={() => { setTeamDialog("join"); setError(""); }}>Join a team</button></div></div>}
+              <div className="kanban-grid team-kanban-grid">{board.map((column) => <section className={"kanban-column column-" + column.tone} key={column.value}>
+                <div className="column-heading"><div className="column-title-group"><span className={"column-status-dot " + column.tone}><span className="status-indicator" /></span><h3>{column.label}</h3><span className="column-count">{column.tasks.length}</span></div></div>
+                <div className="task-stack">{loadingWorkspace ? <div className="task-skeleton" /> : column.tasks.length === 0 ? <div className="column-empty"><span className="column-empty-icon">○</span><p>No shared tasks here yet.</p></div> : column.tasks.map((task) => {
+                  const actor = task.updatedBy || task.createdBy;
+                  const busy = busyIds.has(task.id);
+                  return <article className="task-card team-task-card" key={task.id} style={{ "--actor-color": actor?.avatarColor || "var(--purple)" }}>
+                    <div className="task-card-top"><span className="task-id">TEAM-{String(task.id).padStart(3,"0")}</span><button className="discussion-button" onClick={() => { setSelectedTask(task); setComments([]); setCommentDraft(""); }}>Comment</button></div>
+                    <h4>{task.title}</h4><p className={"task-description" + (!task.description ? " no-description" : "")}>{task.description || "No description added."}</p>
+                    <div className="team-task-activity-tag"><Avatar user={actor} size={25} /><span><strong>{actor?.name || "Team member"}</strong><small>{task.updatedAt ? new Date(task.updatedAt).toLocaleString() : "Task created"}</small></span></div>
+                    <div className="task-card-bottom"><span className={"task-status-label " + column.tone}><span className="status-indicator" />{column.label}</span><label className="status-select-wrap"><span className="visually-hidden">Change status for {task.title}</span><select aria-label={"Change status for " + task.title} value={String(task.status || "TODO").toUpperCase()} disabled={busy} onChange={(event) => updateStatus(task,event.target.value)}>{STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select><span className="status-chevron">⌄</span></label></div>
+                  </article>;
+                })}</div>
+                {column.value === "TODO" && <button className="add-card-button" onClick={() => { setTaskTitle(""); setTaskDescription(""); setTaskDialog(true); }}>＋ Add shared task</button>}
+              </section>)}</div>
+            </section>
+
+            <section className="team-activity-panel"><div className="team-section-kicker">TEAM PULSE</div><h3>Recent activity</h3><p>Task updates and comments, with the contributor shown by avatar and color.</p>
+              {activity.length === 0 ? <div className="activity-empty">Team activity will appear here as you work together.</div> : <div className="team-activity-list">{activity.map((item) => <article className="team-activity-item" key={item.id} style={{ "--actor-color": item.actor?.avatarColor || "var(--purple)" }}><Avatar user={item.actor} size={34} /><div className="team-activity-copy"><div><strong>{item.actor?.name || "Teammate"}</strong> <span>{item.detail}</span></div><small>{item.taskTitle} · {item.createdAt ? new Date(item.createdAt).toLocaleString() : ""}</small></div></article>)}</div>}
+            </section>
+          </> : <section className="team-chat-panel">
+            <header className="team-chat-header"><div className="team-chat-mark">◌</div><div><div className="team-section-kicker">TEAM CONVERSATION</div><h3>{activeTeam.name} chat</h3><p>Every teammate in this team can read and reply. New messages refresh automatically.</p></div><button type="button" className="secondary-button" disabled={chatLoading} onClick={() => { setChatLoading(true); request(API + "/teams/" + activeTeam.id + "/messages").then((result) => setChatMessages(Array.isArray(result) ? result : [])).catch((e) => setChatError(e.message || "Couldn't refresh messages.")).finally(() => setChatLoading(false)); }}>↻ Refresh</button></header>
+            {chatError && <div className="team-error" role="alert"><span>{chatError}</span><button type="button" onClick={() => setChatError("")} aria-label="Dismiss chat error">×</button></div>}
+            <div className="team-chat-messages" aria-live="polite" aria-busy={chatLoading}>
+              {chatLoading && chatMessages.length === 0 ? <div className="chat-empty-state">Loading your team's conversation…</div> : chatMessages.length === 0 ? <div className="chat-empty-state"><div className="chat-empty-icon">✉</div><strong>It's quiet in here.</strong><p>Say hello, share an update, or send an image to start the conversation.</p></div> : chatMessages.map((message) => <article className="team-chat-message" key={message.id} style={{ "--actor-color": message.sender?.avatarColor || "var(--purple)" }}>
+                <Avatar user={message.sender} size={39} />
+                <div className="team-chat-message-main">
+                  <div className="team-chat-message-meta"><strong>{message.sender?.name || "Team member"}</strong><time>{message.createdAt ? new Date(message.createdAt).toLocaleString() : ""}</time></div>
+                  {message.message && <div className="team-chat-bubble"><p>{message.message}</p></div>}
+                  {message.imageUrl && <a className="team-chat-image-link" href={message.imageUrl} target="_blank" rel="noreferrer" title="Open image in a new tab"><img src={message.imageUrl} alt={message.imageName || "Image shared with the team"} loading="lazy" /><span>{message.imageName || "Shared image"} · Open image</span></a>}
+                </div>
+              </article>)}
+              <div ref={chatEndRef} />
+            </div>
+            {chatImageData && <div className="chat-image-pending"><img src={chatImageData} alt="Image ready to send" /><div><strong>{chatImageName || "Image attachment"}</strong><small>Ready to share with this team</small></div><button type="button" title="Remove attachment" aria-label="Remove image attachment" onClick={() => { setChatImageData(""); setChatImageName(""); }}>×</button></div>}
+            <form className="team-chat-composer" onSubmit={sendChatMessage}>
+              <label className="chat-attach-control" title="Attach an image"><input ref={chatFileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={selectChatImage} /><span aria-hidden="true">＋</span><span className="visually-hidden">Attach an image</span></label>
+              <textarea value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={2000} rows={2} placeholder={"Message " + activeTeam.name + "… (Enter to send, Shift+Enter for a new line)"} aria-label="Team chat message" />
+              <button type="submit" className="primary-button" disabled={chatSending || (!chatDraft.trim() && !chatImageData)}>{chatSending ? "Sending…" : "Send ↗"}</button>
+            </form>
+            <div className="team-chat-footnote"><span>JPG, PNG or WebP · compressed to 2 MB max</span><span>{chatDraft.length}/2000</span></div>
+          </section>}
+</div> : <div className="team-no-selection"><div className="team-empty-mark">✳</div><h2>Make space for teamwork.</h2><p>Create a team and invite people with its unique code, or join a team using a code from a teammate.</p><div><button className="primary-button" onClick={() => { setTeamDialog("create"); setError(""); }}>＋ Create team</button><button className="secondary-button" onClick={() => { setTeamDialog("join"); setError(""); }}>Join a team</button></div></div>}
       </div>
 
       {teamDialog && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setTeamDialog(""); }}><section className="create-modal" role="dialog" aria-modal="true" aria-labelledby="team-dialog-title"><div className="modal-heading"><span className="modal-icon">{teamDialog === "create" ? "✳" : "↗"}</span><button className="icon-button modal-close" aria-label="Close team form" disabled={saving} onClick={() => setTeamDialog("")}>×</button><div className="eyebrow">TEAM WORKSPACE</div><h2 id="team-dialog-title">{teamDialog === "create" ? "Create a team" : "Join a team"}</h2><p>{teamDialog === "create" ? "Start a shared space and invite others with your unique code." : "Enter the invite code shared by your teammate."}</p></div><form className="create-form" onSubmit={teamDialog === "create" ? createTeam : joinTeam}>{teamDialog === "create" ? <label className="form-field"><span>Team name <em>*</em></span><input autoFocus maxLength={100} placeholder="e.g. Project Nova" value={teamName} onChange={(event) => setTeamName(event.target.value)} required /></label> : <label className="form-field"><span>Team code <em>*</em></span><input autoFocus maxLength={9} placeholder="ABCD-EFGH" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} required /></label>}{error && <div className="form-error" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={saving} onClick={() => setTeamDialog("")}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Please wait…" : teamDialog === "create" ? "Create team" : "Join team"}</button></div></form></section></div>}

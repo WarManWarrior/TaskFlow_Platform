@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TeamsWorkspace from "./TeamsWorkspace";
+import { imageFileToDataUrl } from "./imageUtils";
 
 const API = "/api";
+const DOODLE_AVATARS = [
+  { id: "fox", label: "Fox", url: "/avatars/doodle-fox.svg" },
+  { id: "cat", label: "Cat", url: "/avatars/doodle-cat.svg" },
+  { id: "dog", label: "Dog", url: "/avatars/doodle-dog.svg" },
+  { id: "rabbit", label: "Rabbit", url: "/avatars/doodle-rabbit.svg" },
+  { id: "panda", label: "Panda", url: "/avatars/doodle-panda.svg" },
+  { id: "penguin", label: "Penguin", url: "/avatars/doodle-penguin.svg" },
+  { id: "frog", label: "Frog", url: "/avatars/doodle-frog.svg" },
+  { id: "raccoon", label: "Raccoon", url: "/avatars/doodle-raccoon.svg" },
+];
 const STATUSES = [
   { value: "TODO", label: "To do", tone: "todo", icon: "circle" },
   { value: "IN_PROGRESS", label: "In progress", tone: "progress", icon: "clock" },
@@ -198,6 +209,20 @@ function App() {
     setUser(null); setTasks([]); setAuthMode("login"); setAuthName(""); setAuthEmail(""); setAuthPassword(""); setAuthError(""); setIsProfileOpen(false); setActivePage("overview");
   }
 
+  async function handleProfileImageSelect(event) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setProfileError("");
+    try {
+      const image = await imageFileToDataUrl(file, { maxDimension: 512, maxDataUrlChars: 650000, maxFileSize: 8 * 1024 * 1024 });
+      setProfileAvatarUrl(image);
+      notify("Profile picture ready. Save changes to apply it.");
+    } catch (error) {
+      setProfileError(error.message || "Couldn't use that image.");
+    }
+  }
+
   async function handleProfileSave(event) {
     event.preventDefault();
     const cleaned = profileName.trim();
@@ -293,7 +318,7 @@ function App() {
         <div className="nav-section-label">WORKSPACE</div>
         <nav className="primary-nav" aria-label="Main navigation"><button className={"nav-link" + (activePage === "overview" ? " active" : "")} onClick={() => navigateTo("overview")}><Icon name="grid" /><span>Overview</span>{activePage === "overview" && <span className="nav-indicator" />}</button><button className={"nav-link" + (activePage === "tasks" ? " active" : "")} onClick={() => navigateTo("tasks")}><Icon name="list" /><span>My tasks</span><span className="nav-count">{tasks.length}</span></button><button className={"nav-link" + (activePage === "teams" ? " active" : "")} onClick={() => navigateTo("teams")}><Icon name="user" /><span>Teams</span></button><button className={"nav-link" + (activePage === "account" ? " active" : "")} onClick={() => navigateTo("account")}><Icon name="user" /><span>Account</span></button></nav>
         <div className="nav-section-label nav-space">YOUR FOCUS</div><div className="focus-card"><span className="focus-icon"><Icon name="spark" size={17} /></span><strong>One thing at a time.</strong><p>Progress comes from the little things you finish today.</p><div className="focus-progress"><span style={{ width: completion + "%" }} /></div><small>{completion}% of tasks completed</small></div>
-        <div className="sidebar-bottom"><button className="online-status" onClick={loadTasks} title="Refresh tasks and check connection"><span className="online-dot" /><span>{isLoading ? "Refreshing workspace…" : "Workspace connected"}</span><Icon name="refresh" size={14} className={isLoading ? "spin-icon" : ""} /></button><div className="profile-row"><div className="profile-avatar">{firstName.slice(0, 1).toUpperCase()}</div><div className="profile-copy"><strong>{user.name}</strong><small>{user.email}</small></div><button className="icon-button profile-action" aria-label="Open profile settings" onClick={() => navigateTo("account")}><Icon name="chevron" size={17} /></button></div></div>
+        <div className="sidebar-bottom"><button className="online-status" onClick={loadTasks} title="Refresh tasks and check connection"><span className="online-dot" /><span>{isLoading ? "Refreshing workspace…" : "Workspace connected"}</span><Icon name="refresh" size={14} className={isLoading ? "spin-icon" : ""} /></button><div className="profile-row"><div className="profile-avatar">{user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : firstName.slice(0, 1).toUpperCase()}</div><div className="profile-copy"><strong>{user.name}</strong><small>{user.email}</small></div><button className="icon-button profile-action" aria-label="Open profile settings" onClick={() => navigateTo("account")}><Icon name="chevron" size={17} /></button></div></div>
       </aside>
 
       <main className="main-area">
@@ -330,7 +355,13 @@ function App() {
 
       {isCreateOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeCreateModal(); }}><section className="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-modal-title"><div className="modal-heading"><span className="modal-icon"><Icon name="spark" size={21} /></span><button className="icon-button modal-close" aria-label="Close form" disabled={isSaving} onClick={closeCreateModal}><Icon name="x" /></button><div className="eyebrow">MAKE IT HAPPEN</div><h2 id="create-modal-title">Create a new task</h2><p>Get it out of your head and onto your board.</p></div><form onSubmit={handleCreate} className="create-form"><label className="form-field"><span>Task title <em>*</em></span><input autoFocus type="text" maxLength={120} placeholder="e.g. Prepare the review presentation" value={title} onChange={(event) => setTitle(event.target.value)} required /></label><label className="form-field"><span>Description <small>OPTIONAL</small></span><textarea rows={4} maxLength={1000} placeholder="Add a little context so future-you knows where to start…" value={description} onChange={(event) => setDescription(event.target.value)} /></label><div className="form-note"><span className="task-status-label todo"><span className="status-indicator" />To do</span><span>You'll be able to update the status later.</span></div><div className="modal-actions"><button type="button" className="secondary-button" disabled={isSaving} onClick={closeCreateModal}>Cancel</button><button type="submit" className="primary-button" disabled={isSaving || !title.trim()}>{isSaving ? <><span className="spinner" />Saving…</> : <><Icon name="plus" size={17} />Create task</>}</button></div></form></section></div>}
 
-      {isProfileOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeProfileModal(); }}><section className="create-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title"><div className="modal-heading"><span className="modal-icon"><Icon name="user" size={21} /></span><button className="icon-button modal-close" aria-label="Close profile" onClick={closeProfileModal}><Icon name="x" /></button><div className="eyebrow">YOUR ACCOUNT</div><h2 id="profile-modal-title">Profile settings</h2><p>Keep your workspace details up to date.</p></div><form onSubmit={handleProfileSave} className="create-form"><label className="form-field"><span>Display name</span><input type="text" maxLength={80} value={profileName} onChange={(event) => setProfileName(event.target.value)} required /></label><label className="form-field"><span>Profile image URL <small>OPTIONAL</small></span><input type="url" maxLength={500} placeholder="https://example.com/photo.jpg" value={profileAvatarUrl} onChange={(event) => setProfileAvatarUrl(event.target.value)} /><small className="avatar-help">Paste a publicly accessible image URL. Leave blank to use your colored initials avatar.</small></label><label className="form-field"><span>Email address</span><input type="email" value={user.email} readOnly /></label>{profileError && <div className="form-error" role="alert"><Icon name="x" size={15} /><span>{profileError}</span></div>}<div className="form-note"><Icon name="shield" size={16} /><span>Your tasks are only visible to your account.</span></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={closeProfileModal}>Cancel</button><button type="submit" className="primary-button" disabled={isProfileSaving || !profileName.trim()}>{isProfileSaving ? <><span className="spinner" />Saving…</> : <><Icon name="check" size={17} />Save changes</>}</button></div></form></section></div>}
+      {isProfileOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeProfileModal(); }}><section className="create-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title"><div className="modal-heading"><span className="modal-icon"><Icon name="user" size={21} /></span><button className="icon-button modal-close" aria-label="Close profile" onClick={closeProfileModal}><Icon name="x" /></button><div className="eyebrow">YOUR ACCOUNT</div><h2 id="profile-modal-title">Profile settings</h2><p>Keep your workspace details up to date.</p></div><form onSubmit={handleProfileSave} className="create-form"><label className="form-field"><span>Display name</span><input type="text" maxLength={80} value={profileName} onChange={(event) => setProfileName(event.target.value)} required /></label><section className="profile-avatar-picker" aria-label="Profile picture">
+<div className="profile-avatar-current"><img src={profileAvatarUrl || "/avatars/doodle-fox.svg"} alt="Selected profile picture" /><div><strong>Profile picture</strong><small>Shown beside your task updates, chat messages, and comments.</small></div></div>
+<div className="profile-avatar-picker-heading"><strong>Choose an animal doodle</strong><span>or upload your own</span></div>
+<div className="profile-avatar-grid">{DOODLE_AVATARS.map((avatar) => <button type="button" key={avatar.id} className={"profile-avatar-option" + (profileAvatarUrl === avatar.url ? " selected" : "")} title={avatar.label} aria-label={"Choose " + avatar.label + " avatar"} aria-pressed={profileAvatarUrl === avatar.url} onClick={() => { setProfileAvatarUrl(avatar.url); setProfileError(""); }}><img src={avatar.url} alt="" /><span>{avatar.label}</span></button>)}</div>
+<label className="profile-avatar-upload"><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleProfileImageSelect} /><span className="profile-avatar-upload-icon">↑</span><span><strong>Upload a custom picture</strong><small>JPG, PNG or WebP · up to 8 MB before compression</small></span></label>
+<label className="form-field profile-avatar-url"><span>Or paste an image URL <small>OPTIONAL</small></span><input type="url" maxLength={500} placeholder="https://example.com/photo.jpg" value={/^https?:\/\//i.test(profileAvatarUrl) ? profileAvatarUrl : ""} onChange={(event) => setProfileAvatarUrl(event.target.value)} /></label>
+</section><label className="form-field"><span>Email address</span><input type="email" value={user.email} readOnly /></label>{profileError && <div className="form-error" role="alert"><Icon name="x" size={15} /><span>{profileError}</span></div>}<div className="form-note"><Icon name="shield" size={16} /><span>Your tasks are only visible to your account.</span></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={closeProfileModal}>Cancel</button><button type="submit" className="primary-button" disabled={isProfileSaving || !profileName.trim()}>{isProfileSaving ? <><span className="spinner" />Saving…</> : <><Icon name="check" size={17} />Save changes</>}</button></div></form></section></div>}
 
       {toast && <div className={"toast toast-" + toast.type} role="status"><span className="toast-icon"><Icon name={toast.type === "error" ? "x" : "check"} size={17} /></span><span>{toast.message}</span><button aria-label="Dismiss message" onClick={() => setToast(null)}><Icon name="x" size={15} /></button></div>}
     </div>
