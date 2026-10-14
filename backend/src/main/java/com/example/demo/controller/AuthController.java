@@ -133,7 +133,7 @@ public class AuthController {
     }
 
     private Map<String, Object> authResponse(AppUser user) {
-        return Map.of("user", Map.of("id", user.getId(), "name", user.getName(), "email", user.getEmail(),
+        return Map.of("user", Map.of("id", user.getId(), "name", user.getName(), "email", user.getEmail(), "avatarUrl", user.getAvatarUrl() == null ? "" : user.getAvatarUrl(),
                 "createdAt", user.getCreatedAt() == null ? "" : user.getCreatedAt().toString()));
     }
     private String normalizeEmail(String value) { return trim(value).toLowerCase(Locale.ROOT); }
