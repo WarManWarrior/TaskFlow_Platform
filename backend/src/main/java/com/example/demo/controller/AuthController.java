@@ -111,6 +111,7 @@ public class AuthController {
 
     private void establishSession(Authentication authentication, HttpServletRequest request, HttpServletResponse response) {
         request.getSession(true);
+        request.changeSessionId();
         SecurityContext context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);
         SecurityContextHolder.setContext(context);
