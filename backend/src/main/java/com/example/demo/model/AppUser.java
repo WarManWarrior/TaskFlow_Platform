@@ -10,7 +10,7 @@ public class AppUser {
     private Long id;
     @Column(nullable = false, length = 80) private String name;
     @Column(nullable = false, length = 254) private String email;
-    @Column(name = "avatar_url", columnDefinition = "TEXT") private String avatarUrl;
+    @Column(name = "avatar_url", length = 500) private String avatarUrl;
     @Column(name = "password_hash", nullable = false, length = 100) private String passwordHash;
     @Column(name = "created_at", nullable = false, updatable = false) private LocalDateTime createdAt;
 

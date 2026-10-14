@@ -1,6 +1,8 @@
 package com.example.demo.controller;
 
 import com.example.demo.model.*;
+import com.example.demo.dto.ChatMessageSummary;
+import org.springframework.data.domain.PageRequest;
 import com.example.demo.repository.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpHeaders;
@@ -123,9 +125,9 @@ public class TeamController {
     @Transactional(readOnly = true)
     public List<Map<String,Object>> getChatMessages(@PathVariable Long teamId, Authentication auth) {
         requireMembership(teamId, currentUser(auth));
-        return chatMessages.findTop100ByTeam_IdOrderByCreatedAtDesc(teamId).stream()
-            .sorted(Comparator.comparing(ChatMessage::getCreatedAt))
-            .map(message -> chatMessageMap(teamId, message)).toList();
+        return chatMessages.findRecentSummariesByTeam(teamId, PageRequest.of(0, 100)).stream()
+            .sorted(Comparator.comparing(ChatMessageSummary::createdAt))
+            .map(this::chatMessageSummaryMap).toList();
     }
 
     @PostMapping("/{teamId}/messages")
@@ -174,13 +176,28 @@ public class TeamController {
     }
 
     private Map<String,Object> chatMessageMap(Long teamId, ChatMessage message) {
+        return messageMap(teamId, message.getId(), message.getMessage(), message.getImageData() == null ? null : message.getImageName(),
+            message.getCreatedAt(), message.getSender().getId(), message.getSender().getName(), message.getSender().getEmail(), message.getSender().getAvatarUrl());
+    }
+
+    private Map<String,Object> chatMessageSummaryMap(ChatMessageSummary message) {
+        return messageMap(message.teamId(), message.id(), message.message(), message.imageName(), message.createdAt(),
+            message.senderId(), message.senderName(), message.senderEmail(), message.senderAvatarUrl());
+    }
+
+    private Map<String,Object> messageMap(Long teamId, Long id, String text, String imageName, java.time.LocalDateTime createdAt,
+            Long senderId, String senderName, String senderEmail, String senderAvatarUrl) {
         Map<String,Object> item = new LinkedHashMap<>();
-        item.put("id", message.getId());
-        item.put("message", message.getMessage());
-        item.put("imageName", message.getImageName() == null ? "" : message.getImageName());
-        item.put("imageUrl", message.getImageData() == null ? "" : "/api/teams/" + teamId + "/messages/" + message.getId() + "/image");
-        item.put("createdAt", time(message.getCreatedAt()));
-        item.put("sender", userMap(message.getSender()));
+        item.put("id", id);
+        item.put("message", text);
+        item.put("imageName", imageName == null ? "" : imageName);
+        item.put("imageUrl", imageName == null ? "" : "/api/teams/" + teamId + "/messages/" + id + "/image");
+        item.put("createdAt", time(createdAt));
+        int index = Math.floorMod(senderId == null ? 0 : senderId.intValue(), COLORS.length);
+        Map<String,Object> sender = new LinkedHashMap<>();
+        sender.put("id", senderId); sender.put("name", senderName); sender.put("email", senderEmail);
+        sender.put("avatarUrl", effectiveAvatarUrl(senderId, senderAvatarUrl)); sender.put("avatarColor", COLORS[index]);
+        item.put("sender", sender);
         return item;
     }
 
@@ -222,10 +239,11 @@ public class TeamController {
         m.put("avatarUrl",effectiveAvatarUrl(u)); m.put("avatarColor",COLORS[index]); return m;
     }
     private String effectiveAvatarUrl(AppUser user) {
-        String saved = user.getAvatarUrl();
-        if (saved != null && saved.startsWith("data:image/")) return "/api/auth/avatar/" + user.getId();
+        return effectiveAvatarUrl(user.getId(), user.getAvatarUrl());
+    }
+    private String effectiveAvatarUrl(Long userId, String saved) {
         if (saved != null && !saved.isBlank()) return saved;
-        return ANIMAL_AVATARS[Math.floorMod(user.getId() == null ? 0 : user.getId().intValue(), ANIMAL_AVATARS.length)];
+        return ANIMAL_AVATARS[Math.floorMod(userId == null ? 0 : userId.intValue(), ANIMAL_AVATARS.length)];
     }
     private String generateCode() {
         for(int n=0;n<20;n++) {

@@ -1,7 +1,9 @@
 package com.example.demo.controller;
 
 import com.example.demo.model.AppUser;
+import com.example.demo.model.UserAvatarImage;
 import com.example.demo.repository.AppUserRepository;
+import com.example.demo.repository.UserAvatarImageRepository;
 import com.example.demo.repository.TaskRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -47,15 +49,16 @@ public class AuthController {
     );
     private final AppUserRepository users;
     private final TaskRepository tasks;
+    private final UserAvatarImageRepository avatarImages;
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final SecurityContextRepository securityContextRepository;
     private final CookieCsrfTokenRepository csrfTokenRepository;
 
-    public AuthController(AppUserRepository users, TaskRepository tasks, PasswordEncoder passwordEncoder,
+    public AuthController(AppUserRepository users, TaskRepository tasks, UserAvatarImageRepository avatarImages, PasswordEncoder passwordEncoder,
             AuthenticationManager authenticationManager, SecurityContextRepository securityContextRepository,
             CookieCsrfTokenRepository csrfTokenRepository) {
-        this.users = users; this.tasks = tasks; this.passwordEncoder = passwordEncoder;
+        this.users = users; this.tasks = tasks; this.avatarImages = avatarImages; this.passwordEncoder = passwordEncoder;
         this.authenticationManager = authenticationManager; this.securityContextRepository = securityContextRepository;
         this.csrfTokenRepository = csrfTokenRepository;
     }
@@ -109,11 +112,13 @@ public class AuthController {
     public ResponseEntity<byte[]> getAvatar(@PathVariable Long userId, Authentication authentication) {
         currentUser(authentication);
         AppUser target = users.findById(userId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Profile image not found."));
-        String stored = target.getAvatarUrl();
-        Matcher matcher = stored == null ? IMAGE_DATA_URL.matcher("") : IMAGE_DATA_URL.matcher(stored);
-        if (stored == null || stored.length() > 700_000 || !matcher.matches()) {
+        if (!("/api/auth/avatar/" + userId).equals(target.getAvatarUrl())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Uploaded profile image not found.");
         }
+        UserAvatarImage stored = avatarImages.findByUser_Id(userId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Uploaded profile image not found."));
+        Matcher matcher = IMAGE_DATA_URL.matcher(stored.getImageData());
+        if (!matcher.matches()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Uploaded profile image is invalid.");
         byte[] bytes;
         try { bytes = Base64.getDecoder().decode(matcher.group(2)); }
         catch (IllegalArgumentException ex) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Uploaded profile image is invalid."); }
@@ -132,22 +137,31 @@ public class AuthController {
         user.setName(name);
         String avatarUrl = trim(body.get("avatarUrl"));
         if (avatarUrl.equals("/api/auth/avatar/" + user.getId())) {
-            // Keep the user's currently stored custom image when only other profile fields change.
+            // Keep the current uploaded image when only other profile fields change.
         } else if (avatarUrl.isBlank()) {
+            avatarImages.deleteByUser_Id(user.getId());
             user.setAvatarUrl(defaultAvatar(user.getId()));
         } else if (DEFAULT_AVATARS.contains(avatarUrl)) {
+            avatarImages.deleteByUser_Id(user.getId());
             user.setAvatarUrl(avatarUrl);
         } else if (avatarUrl.startsWith("https://") || avatarUrl.startsWith("http://")) {
             if (avatarUrl.length() > 500) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Profile image URL must be 500 characters or fewer.");
+            avatarImages.deleteByUser_Id(user.getId());
             user.setAvatarUrl(avatarUrl);
         } else if (avatarUrl.length() <= 700_000 && IMAGE_DATA_URL.matcher(avatarUrl).matches()) {
+            Matcher matcher = IMAGE_DATA_URL.matcher(avatarUrl);
+            matcher.matches();
             try {
-                byte[] data = Base64.getDecoder().decode(IMAGE_DATA_URL.matcher(avatarUrl).replaceFirst("$2"));
+                byte[] data = Base64.getDecoder().decode(matcher.group(2));
                 if (data.length > 512 * 1024) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Profile images must be 512 KB or smaller after compression.");
             } catch (IllegalArgumentException ex) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That profile image isn't a valid image.");
             }
-            user.setAvatarUrl(avatarUrl);
+            UserAvatarImage stored = avatarImages.findByUser_Id(user.getId())
+                .orElseGet(() -> new UserAvatarImage(user, avatarUrl));
+            stored.setImageData(avatarUrl);
+            avatarImages.save(stored);
+            user.setAvatarUrl("/api/auth/avatar/" + user.getId());
         } else {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a doodle, upload a JPG/PNG/WebP image, or use an HTTP(S) image URL.");
         }
