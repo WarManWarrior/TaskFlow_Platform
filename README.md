@@ -190,8 +190,6 @@ sudo kubectl get svc -n monitoring
 
 ## Database backup and restore
 
-The PostgreSQL backup CronJob is declared in `k8s-manifests/db-backup-cronjob.yaml` and writes custom-format dump archives to the `taskflow-backups-pvc` volume. The job retries transient `pg_dump` failures, writes to a temporary file, validates the archive with `pg_restore --list`, and publishes the `.dump` file only after validation succeeds. After a successful backup, it removes zero-byte leftovers from earlier failed runs and keeps no more than seven recent backups, deleting files older than seven days.
-
 The checked-in and live `taskflow-db-backup` CronJob writes custom-format PostgreSQL dumps to `taskflow-backups-pvc`. Its current script retries transient database connection failures up to six attempts, writes to a temporary file, validates the archive with `pg_restore --list`, and only publishes the dump after validation succeeds. After a successful backup, it removes zero-byte dump files and files older than seven days, and retains at most seven completed dumps. During an earlier backup run, one pod encountered `Connection refused` while PostgreSQL was unavailable; the companion pod completed and the Kubernetes Job reached `Complete`.
 
 The 20 October 2026 dump (`taskflow-20261020T130143Z.dump`, 25,509 bytes) is stored in the S3 bucket `taskflow-db-backups-2026`. Downloading the object again produced the same SHA-256 checksum as the local source, and S3 metadata confirmed AES-256 server-side encryption plus an object version ID. A valid 19 October dump is also present in S3, and bucket versioning is enabled.
