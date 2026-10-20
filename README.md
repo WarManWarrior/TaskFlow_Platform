@@ -141,7 +141,7 @@ The pipeline uses GitHub Actions with Docker Buildx. It builds the frontend from
 
 The workflow updates `k8s-manifests/backend-deployment.yaml` and `k8s-manifests/frontend-deployment.yaml` to use the new SHA-tagged images. It commits the GitOps update with `[skip ci]` so that the generated commit does not trigger another build. Docker Hub credentials are supplied through GitHub Actions secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. These values must be configured in repository settings and must never be committed to source control.
 
-The backend Dockerfile currently runs Maven packaging with `-DskipTests`, and the GitHub Actions workflow does not run a separate unit-test stage. The current backend test tree contains a Spring application context-load test, but the automated pipeline should not be described as a comprehensive test suite.
+The backend Dockerfile still uses `-DskipTests` during image packaging, but the dedicated `quality-checks` job now runs first. It executes `npm ci`, `npm run lint`, and `npm run build` for the frontend, then runs `./mvnw -B test` against an ephemeral PostgreSQL 15 service. Only if those checks pass does the workflow build both container images. Pull requests build without publishing; pushes to `main` publish the images and update the GitOps tags. The current backend test suite includes a Spring application context-load test, so these checks improve the pipeline but are not comprehensive API or end-to-end coverage. The quality checks and both image builds passed in [GitHub Actions run 43](https://github.com/WarManWarrior/TaskFlow_Platform/actions/runs/39440188438).
 
 ## Kubernetes deployment
 
@@ -192,7 +192,7 @@ sudo kubectl get svc -n monitoring
 
 The PostgreSQL backup CronJob is declared in `k8s-manifests/db-backup-cronjob.yaml` and writes custom-format dump archives to the `taskflow-backups-pvc` volume. The job retries transient `pg_dump` failures, writes to a temporary file, validates the archive with `pg_restore --list`, and publishes the `.dump` file only after validation succeeds. After a successful backup, it removes zero-byte leftovers from earlier failed runs and keeps no more than seven recent backups, deleting files older than seven days.
 
-The current backup archive passed a `pg_restore --list` structural check. A previous restore test also restored a dump to a temporary PostgreSQL pod and queried its public tables; repeat a full restore test after changes to the backup process. Backup storage definitions are still maintained outside the checked-in manifests, and the backup path is on the same EC2 host as the database. For stronger disaster recovery, copy backups to storage outside the instance, such as an encrypted S3 bucket.
+The current backup archive passed a `pg_restore --list` structural check. A previous restore test also restored a dump to a temporary PostgreSQL pod and queried its public tables. The 20 October 2026 dump (`taskflow-20261020T130143Z.dump`, 25,509 bytes) was uploaded to the S3 bucket `taskflow-db-backups-2026` with S3-managed encryption requested; downloading it again produced the same SHA-256 checksum as the source. A valid 19 October dump was also uploaded. The EC2 host has a manually configured `taskflow-s3-backup-sync.timer` intended to synchronize non-empty local dumps to the `taskflow/` S3 prefix hourly. The sync script was run successfully by hand; the first scheduled timer execution has not yet been verified. The S3 bucket has versioning enabled. Bucket lifecycle expiration and an isolated restore from the S3 copy remain to be configured/tested. Backup storage PV/PVC resources and the host-level systemd timer are currently maintained outside the checked-in manifests.
 
 ## TLS and ingress
 
@@ -223,7 +223,7 @@ cd backend
 
 On Windows, run `mvnw.cmd spring-boot:run` from the `backend` directory after setting the same environment variables in PowerShell. The backend listens on port 8080 by default.
 
-The application properties use Hibernate's `ddl-auto=update` for schema updates and enable SQL logging. These are convenient for development; production database migration and logging settings should be reviewed before a production release. Do not rely on the example fallback database password from `application.properties` for a deployed system; provide credentials through protected environment variables or a secret manager.
+The application properties now require `DB_PASSWORD` to be provided and disable SQL statement logging. Local development must export `DB_PASSWORD`, as shown above; the production Kubernetes Deployment supplies the datasource password from the `db-credentials` Secret. Hibernate `ddl-auto=update` remains enabled for this project, so adopting reviewed, versioned schema migrations is still recommended before production use.
 
 ### Frontend
 
@@ -250,7 +250,7 @@ The frontend build uses `npm ci` and `npm run build`, then copies the generated 
 
 The following checks have been observed during deployment and troubleshooting:
 
-- GitHub Actions completed successfully for the application image and manifest-update workflow.
+- GitHub Actions completed the new quality-check job: frontend lint/build and backend Maven tests using a temporary PostgreSQL service, followed by successful frontend and backend image builds on the pull request.
 - Frontend and backend Services were changed to internal `ClusterIP` Services.
 - The production certificate resource reached `READY=True`.
 - `curl -I http://taskflowteams.duckdns.org/` returned `308 Permanent Redirect`.
@@ -258,15 +258,14 @@ The following checks have been observed during deployment and troubleshooting:
 - Grafana successfully queried Prometheus and displayed node CPU, memory, container restarts, and available TaskFlow replicas.
 - A PostgreSQL backup was created, restored into a temporary test database pod, and its tables were listed.
 
-These are deployment checks, not a claim that the project has exhaustive automated coverage. Add automated backend tests, frontend tests, security scanning, and an end-to-end smoke test to the CI workflow before relying on it for production changes.
+These are deployment checks, not a claim that the project has exhaustive automated coverage. API/integration and end-to-end tests, Kubernetes manifest validation, security scanning, and post-deployment smoke tests are still outstanding.
 
 ## Current limitations and next work
 
-1. **Complete backup verification.** The CronJob now retries transient failures and validates archives before publishing them. Run a full restore test after backup-script changes and confirm the next scheduled run succeeds.
-2. **Make infrastructure setup repeatable.** Check the database volume, backup storage definitions, Secret references, cert-manager issuers, certificate, and monitoring Helm values into an appropriate deployment structure. The backup CronJob manifest is already tracked in `k8s-manifests/db-backup-cronjob.yaml`. Keep secrets out of Git and use a secret manager or sealed/external-secret approach.
-3. **Move backups off the EC2 node.** Local backups protect against some database errors, but not against loss of the instance or its attached storage.
-4. **Add automated tests to CI.** The current Docker build skips backend tests, and the workflow does not run a frontend test suite.
-5. **Review production settings.** Replace development fallback credentials, review Hibernate schema-update behavior and SQL logging, set resource requests and limits based on measurements, and verify notification delivery.
+1. **Finish off-instance backup verification.** S3 copies now exist and their checksums were verified. Verify a scheduled timer execution, configure a bucket lifecycle rule, and restore a downloaded S3 archive into an isolated test database.
+2. **Make infrastructure setup repeatable.** Check the database volume, backup storage definitions, Secret references, cert-manager issuers, certificate, monitoring Helm values, and host-level S3 sync timer into an appropriate provisioning/runbook structure. The backup CronJob manifest is already tracked in `k8s-manifests/db-backup-cronjob.yaml`. Keep secrets out of Git and use a secret manager or sealed/external-secret approach.
+3. **Expand automated tests.** CI now runs frontend lint/build and a backend context-load test against PostgreSQL before image builds. Add API/integration tests, Kubernetes manifest validation, security scanning, and post-deployment smoke tests.
+4. **Review remaining production settings.** The fallback database password has been removed and SQL logging is disabled. Hibernate `ddl-auto=update` remains enabled; plan versioned schema migrations, set resource requests/limits from measurements, and verify notification delivery.
 6. **Plan for availability.** The current K3s cluster has a single node and local persistent storage. It is useful for a learning and demonstration environment, but it does not provide node-level high availability.
 7. **Restrict administrative access.** Argo CD, Prometheus, and Grafana have been accessed through local SSH tunnels and Kubernetes port-forwards. Keep their admin interfaces private and limit SSH access to trusted source IPs.
 
