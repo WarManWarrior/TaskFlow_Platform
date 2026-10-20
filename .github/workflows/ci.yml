@@ -7,8 +7,10 @@ on:
   pull_request:
     branches: ["main"]
 
+# Jobs receive read-only repository access by default. Only the GitOps image-tag
+# update job needs write access to commit the generated manifest changes.
 permissions:
-  contents: write
+  contents: read
 
 # Avoid concurrent main-branch builds racing to update the same GitOps manifests.
 concurrency:
@@ -16,8 +18,71 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-push:
+  quality-checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_NAME: taskflow
+      DB_USER: taskflow_user
+      DB_PASSWORD: ci_taskflow_password
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: taskflow
+          POSTGRES_USER: taskflow_user
+          POSTGRES_PASSWORD: ci_taskflow_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U taskflow_user -d taskflow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint Frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build Frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+
+      - name: Run Backend Tests
+        working-directory: backend
+        run: bash ./mvnw -B test
+
+  build-and-push:
+    needs: quality-checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Code
