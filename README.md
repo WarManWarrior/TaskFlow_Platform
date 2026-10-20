@@ -16,9 +16,9 @@ The live deployment URL belongs to the current EC2 environment. The hostname res
 flowchart TD
     Browser[Browser] --> DNS[DuckDNS hostname]
     DNS --> SG[AWS security group: TCP 80 and 443]
-    SG --> NGINX[Ingress NGINX controller - current public entry point]
-    NGINX -->|/| FE[Frontend Service: ClusterIP]
-    NGINX -->|/api| BE[Backend Service: ClusterIP]
+    SG --> TRAEFIK[Traefik Ingress controller - current public entry point]
+    TRAEFIK -->|/| FE[Frontend Service: ClusterIP]
+    TRAEFIK -->|/api| BE[Backend Service: ClusterIP]
     FE --> FEPod[React build served by NGINX]
     BE --> BEPod[Spring Boot API on port 8080]
     BEPod --> DBSvc[PostgreSQL Service: ClusterIP]
@@ -71,7 +71,7 @@ For pull requests, the workflow builds images without pushing them. For pushes t
 | Kubernetes / K3s | Runs application workloads, Services, storage resources, and monitoring components. K3s is the lightweight Kubernetes distribution used on EC2. |
 | Deployments and Services | Manage pod replicas and provide stable internal addresses for the frontend, backend, and database. |
 | PersistentVolumes and PersistentVolumeClaims | Keep database files outside the PostgreSQL container's writable layer. The current database volume uses local EC2 storage. |
-| Ingress NGINX | Current public HTTP/HTTPS entry point; routes the hostname to the frontend and API and uses the TLS Secret. |
+| Traefik | Current public HTTP/HTTPS entry point; routes the hostname to the frontend and API and uses the TLS Secret. |
 | cert-manager and Let's Encrypt | Request and renew the TLS certificate. A staging certificate tested validation before the production certificate was issued. |
 | DuckDNS | Provides the free hostname pointing to the EC2 public IP. |
 | Helm | Installs and manages chart-based components such as Traefik, Prometheus, and Grafana. |
@@ -127,11 +127,11 @@ Users can create teams and join them using a team code. The team API exposes mem
     ├── db-deployment.yaml
     ├── db-service.yaml
     ├── frontend-deployment.yaml
-    ├── ingress.yaml                 # Current NGINX Ingress and TLS
-    └── traefik-ingress.yaml         # Parallel migration route, under test
+    ├── db-backup-cronjob.yaml       # Retried, validated PostgreSQL backups
+    └── traefik-ingress.yaml         # Current Traefik Ingress and TLS
 ~~~
 
-Some cluster resources were created directly on EC2 and are not yet managed from this repository. These include the database Secret and volume definitions, the backup volume and CronJob, Helm values for monitoring, cert-manager issuers/certificate objects, and parts of the Traefik installation. The production TLS private key is stored in a Kubernetes Secret, not in GitHub.
+Some cluster resources were created directly on EC2 and are not yet managed from this repository. These include the database Secret and PersistentVolume/PersistentVolumeClaim definitions, backup storage definitions, Helm values for monitoring, cert-manager issuers/certificate objects, and parts of the Traefik installation. The backup CronJob itself is now declared in `k8s-manifests/db-backup-cronjob.yaml`. The production TLS private key is stored in a Kubernetes Secret, not in GitHub.
 
 ## CI pipeline and image tags
 
@@ -181,7 +181,6 @@ sudo kubectl get ingress -n default
 # Certificate and controller status
 sudo kubectl get certificate -n default
 sudo kubectl get pods -n cert-manager
-sudo kubectl get pods -n ingress-nginx
 sudo kubectl get pods -n traefik
 
 # Monitoring resources
@@ -191,19 +190,17 @@ sudo kubectl get svc -n monitoring
 
 ## Database backup and restore
 
-A PostgreSQL backup CronJob was created in the cluster, with dump files written to a mounted backup volume. A backup test produced a PostgreSQL dump under `/backups`, and the file was visible on the EC2 host under `/mnt/data/taskflow-backups`. A restore test created a temporary PostgreSQL pod, restored a dump, and queried the database's public tables.
+The PostgreSQL backup CronJob is declared in `k8s-manifests/db-backup-cronjob.yaml` and writes custom-format dump archives to the `taskflow-backups-pvc` volume. The job retries transient `pg_dump` failures, writes to a temporary file, validates the archive with `pg_restore --list`, and publishes the `.dump` file only after validation succeeds. After a successful backup, it removes zero-byte leftovers from earlier failed runs and keeps no more than seven recent backups, deleting files older than seven days.
 
-The backup resources are currently maintained outside the checked-in manifest directory, so a new cluster cannot be rebuilt entirely from this repository alone. The backup path is on the same EC2 host as the database. For stronger disaster recovery, the backup should also be copied to storage outside the instance, such as an encrypted S3 bucket, and restore tests should be repeated periodically.
+The current backup archive passed a `pg_restore --list` structural check. A previous restore test also restored a dump to a temporary PostgreSQL pod and queried its public tables; repeat a full restore test after changes to the backup process. Backup storage definitions are still maintained outside the checked-in manifests, and the backup path is on the same EC2 host as the database. For stronger disaster recovery, copy backups to storage outside the instance, such as an encrypted S3 bucket.
 
-## TLS and ingress migration status
+## TLS and ingress
 
-The current public entry point is Ingress NGINX. cert-manager was installed in the cluster, and two ClusterIssuers were created for Let's Encrypt staging and production. The staging certificate validated the HTTP-01 challenge; the production Certificate `taskflowteams-production` was observed as ready and stored in the Secret `taskflowteams-tls`.
+Traefik is the current public HTTP/HTTPS entry point. The live `taskflow-traefik-ingress` resource uses `ingressClassName: traefik`, terminates TLS using the `taskflowteams-tls` Secret, routes `/` to `taskflow-frontend:80`, and routes `/api` to `taskflow-backend:8080`. The Traefik controller is configured to bind host ports 80 and 443. Following the cutover, HTTP returned `308 Permanent Redirect`, HTTPS returned `200 OK`, and the API CSRF endpoint returned valid JSON. The old NGINX Ingress resource and `ingress-nginx` namespace were removed. An unused cluster-wide `nginx` IngressClass may remain, but no current Ingress uses it.
 
-The live Ingress uses the hostname `taskflowteams.duckdns.org`, serves HTTPS on port 443, and redirects HTTP on port 80 to HTTPS. DuckDNS points the hostname to the EC2 public IPv4 address. Do not commit the private key in `taskflowteams-tls` or the DuckDNS API token to GitHub.
+cert-manager was installed in the cluster, and the production certificate is stored in the Kubernetes Secret `taskflowteams-tls`. DuckDNS points `taskflowteams.duckdns.org` to the EC2 public IPv4 address. Do not commit the certificate's private key or the DuckDNS API token to GitHub. The Traefik Ingress manifest is checked in at `k8s-manifests/traefik-ingress.yaml`.
 
-A Traefik Helm release has also been installed alongside the existing controller. Its pod was observed running and a separate `traefik` IngressClass exists. The repository contains `k8s-manifests/traefik-ingress.yaml` for a parallel test route, but the Traefik Service configuration and end-to-end HTTPS path have not been fully verified. The existing NGINX route remains the confirmed live entry point; don't remove it until Traefik has passed route, certificate, API, and browser tests.
-
-This migration is needed because the Kubernetes community retired Ingress NGINX on March 24, 2026. The retired project no longer receives new releases or security fixes. See the [Kubernetes Ingress NGINX retirement notice](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/).
+Ingress NGINX was retired by the Kubernetes project in March 2026 and no longer receives new releases or security fixes. See the [Kubernetes Ingress NGINX retirement notice](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/).
 
 ## Local development
 
@@ -265,13 +262,13 @@ These are deployment checks, not a claim that the project has exhaustive automat
 
 ## Current limitations and next work
 
-1. **Finish the Traefik migration.** Validate the Service type and temporary NodePorts, test the new Ingress route over HTTPS, then switch public traffic only after the replacement works. Remove the retired controller after the new route is confirmed.
-2. **Make infrastructure setup repeatable.** Check the database volume, backup volume, CronJob, Secret references, cert-manager issuers, certificate, and monitoring Helm values into an appropriate deployment structure. Keep secrets out of Git and use a secret manager or sealed/external-secret approach.
+1. **Complete backup verification.** The CronJob now retries transient failures and validates archives before publishing them. Run a full restore test after backup-script changes and confirm the next scheduled run succeeds.
+2. **Make infrastructure setup repeatable.** Check the database volume, backup storage definitions, Secret references, cert-manager issuers, certificate, and monitoring Helm values into an appropriate deployment structure. The backup CronJob manifest is already tracked in `k8s-manifests/db-backup-cronjob.yaml`. Keep secrets out of Git and use a secret manager or sealed/external-secret approach.
 3. **Move backups off the EC2 node.** Local backups protect against some database errors, but not against loss of the instance or its attached storage.
 4. **Add automated tests to CI.** The current Docker build skips backend tests, and the workflow does not run a frontend test suite.
 5. **Review production settings.** Replace development fallback credentials, review Hibernate schema-update behavior and SQL logging, set resource requests and limits based on measurements, and verify notification delivery.
 6. **Plan for availability.** The current K3s cluster has a single node and local persistent storage. It is useful for a learning and demonstration environment, but it does not provide node-level high availability.
-7. **Restore workstation access to Argo CD.** The Argo CD application was previously healthy, but the Windows SSH tunnel currently times out on TCP port 22. AWS EC2 Instance Connect remains the available administration path while networking is investigated.
+7. **Restrict administrative access.** Argo CD, Prometheus, and Grafana have been accessed through local SSH tunnels and Kubernetes port-forwards. Keep their admin interfaces private and limit SSH access to trusted source IPs.
 
 ## References
 
