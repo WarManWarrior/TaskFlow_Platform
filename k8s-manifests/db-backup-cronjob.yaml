@@ -1,0 +1,130 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: taskflow-db-backup
+  namespace: default
+spec:
+  schedule: "0 2 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  suspend: false
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: taskflow-db-backup
+        spec:
+          restartPolicy: Never
+          initContainers:
+            - name: prepare-backup-directory
+              image: busybox:1.36
+              command:
+                - /bin/sh
+                - -c
+                - mkdir -p /backups && chown 999:999 /backups && chmod 700 /backups
+              securityContext:
+                runAsUser: 0
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backups
+          containers:
+            - name: postgres-backup
+              image: postgres:15
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: db-credentials
+                      key: username
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: db-credentials
+                      key: password
+                - name: POSTGRES_DB
+                  value: taskflow
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+
+                  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+                  backup_file="/backups/taskflow-${timestamp}.dump"
+                  tmp_file="/backups/.taskflow-${timestamp}.dump.partial"
+                  trap 'rm -f "$tmp_file"' 0 HUP INT TERM
+
+                  echo "Starting TaskFlow database backup..."
+                  attempt=1
+                  max_attempts=6
+
+                  # Retry transient database restarts or connection failures.
+                  while [ "$attempt" -le "$max_attempts" ]; do
+                    rm -f "$tmp_file"
+
+                    if pg_dump \
+                      --host=taskflow-db \
+                      --username="$POSTGRES_USER" \
+                      --dbname="$POSTGRES_DB" \
+                      --format=custom \
+                      --no-owner \
+                      --no-acl \
+                      --file="$tmp_file"; then
+                      if [ -s "$tmp_file" ] && pg_restore --list "$tmp_file" >/dev/null; then
+                        # Publish only a complete, readable archive.
+                        mv "$tmp_file" "$backup_file"
+                        break
+                      fi
+                      echo "Backup archive validation failed (attempt $attempt/$max_attempts)." >&2
+                    else
+                      echo "pg_dump failed (attempt $attempt/$max_attempts); retrying if attempts remain." >&2
+                    fi
+
+                    rm -f "$tmp_file"
+                    if [ "$attempt" -lt "$max_attempts" ]; then
+                      sleep 10
+                    fi
+                    attempt=$((attempt + 1))
+                  done
+
+                  if [ ! -s "$backup_file" ]; then
+                    echo "ERROR: no valid database backup was produced." >&2
+                    exit 1
+                  fi
+
+                  echo "Backup created and validated:"
+                  ls -lh "$backup_file"
+
+                  # Remove incomplete files left by earlier versions of this job.
+                  find /backups -maxdepth 1 -type f -name 'taskflow-*.dump' -size 0 -delete
+
+                  # Retain backups from the last seven days.
+                  find /backups -maxdepth 1 -type f \
+                    -name 'taskflow-*.dump' -mtime +7 -delete
+
+                  # Keep no more than the seven newest completed backups.
+                  ls -1t /backups/taskflow-*.dump 2>/dev/null \
+                    | tail -n +8 | xargs -r rm -f
+
+                  echo "Current backups:"
+                  ls -lh /backups
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backups
+          volumes:
+            - name: backup-storage
+              persistentVolumeClaim:
+                claimName: taskflow-backups-pvc
