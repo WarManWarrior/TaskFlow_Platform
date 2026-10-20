@@ -190,15 +190,13 @@ sudo kubectl get svc -n monitoring
 
 ## Database backup and restore
 
-The PostgreSQL backup CronJob is declared in `k8s-manifests/db-backup-cronjob.yaml` and writes custom-format dump archives to the `taskflow-backups-pvc` volume. The job retries transient `pg_dump` failures, writes to a temporary file, validates the archive with `pg_restore --list`, and publishes the `.dump` file only after validation succeeds. After a successful backup, it removes zero-byte leftovers from earlier failed runs and keeps no more than seven recent backups, deleting files older than seven days.
-
 The checked-in and live `taskflow-db-backup` CronJob writes custom-format PostgreSQL dumps to `taskflow-backups-pvc`. Its current script retries transient database connection failures up to six attempts, writes to a temporary file, validates the archive with `pg_restore --list`, and only publishes the dump after validation succeeds. After a successful backup, it removes zero-byte dump files and files older than seven days, and retains at most seven completed dumps. During an earlier backup run, one pod encountered `Connection refused` while PostgreSQL was unavailable; the companion pod completed and the Kubernetes Job reached `Complete`.
 
 The 20 October 2026 dump (`taskflow-20261020T130143Z.dump`, 25,509 bytes) is stored in the S3 bucket `taskflow-db-backups-2026`. Downloading the object again produced the same SHA-256 checksum as the local source, and S3 metadata confirmed AES-256 server-side encryption plus an object version ID. A valid 19 October dump is also present in S3, and bucket versioning is enabled.
 
 An isolated restore test was completed from the downloaded 20 October S3 object using a disposable PostgreSQL 15 pod with an empty temporary database volume and the backup volume mounted read-only. `pg_restore` completed successfully; ten public tables were present, with four users, four tasks, and two teams. The temporary restore pod and test dump file were removed afterwards; the production database was not modified.
 
-The EC2 host has a manually configured `taskflow-s3-backup-sync.timer`, scheduled hourly, to synchronize non-empty local dumps to the `taskflow/` S3 prefix. The sync service was run manually and exited successfully; the timer is enabled and active. A calendar-triggered invocation still needs explicit confirmation. S3 lifecycle expiration has not been configured. Backup storage PV/PVC resources and the host-level systemd timer remain outside the checked-in manifests.
+The EC2 host has a manually configured `taskflow-s3-backup-sync.timer`, scheduled hourly, to synchronize non-empty local dumps to the `taskflow/` S3 prefix. The sync service was run manually and exited successfully. A further backup was generated on 20 October 2026 by starting a one-off Job from the live CronJob: the script printed `Backup created and validated`, produced `taskflow-20261020T153003Z.dump` (25,509 bytes), and removed the earlier zero-byte dump files. The host sync service then uploaded that object to S3; S3 metadata showed AES-256 encryption and a version ID, and the downloaded copy's SHA-256 matched the local file exactly (`9e6a0d2fff3591b49e9ec0e6086f70c659c17f27f45e6f7863202880572e0906`). Three valid dumps were present in S3 after that run (19 October and two from 20 October). The timer is enabled and active, but a timer-triggered rather than manually triggered invocation still needs explicit confirmation. S3 lifecycle expiration has not been configured. Backup storage PV/PVC resources and the host-level systemd timer remain outside the checked-in manifests.
 
 ## TLS and ingress
 
@@ -263,6 +261,7 @@ The following checks have been observed during deployment and troubleshooting:
 - `curl -I https://taskflowteams.duckdns.org/` returned `HTTP/2 200` without bypassing certificate validation.
 - Grafana successfully queried Prometheus and displayed node CPU, memory, container restarts, and available TaskFlow replicas.
 - The 20 October database dump was downloaded from S3 with an exact SHA-256 match to the source, then restored into an isolated PostgreSQL 15 test database. All ten public tables were listed, and sample row counts were verified (4 users, 4 tasks, 2 teams); the temporary test pod and dump were subsequently removed.
+- A one-off Job created from the live backup CronJob generated and validated a fresh dump, removed prior zero-byte dump files, and retained three valid local dumps. The newest dump was uploaded to S3, downloaded again, and verified against its local SHA-256 checksum.
 
 These are deployment checks, not a claim that the project has exhaustive automated coverage. API/integration and end-to-end tests, Kubernetes manifest validation, security scanning, and post-deployment smoke tests are still outstanding.
 
