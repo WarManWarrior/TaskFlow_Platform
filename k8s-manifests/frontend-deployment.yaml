@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: docker.io/sidelines/taskflow-frontend:581d820
+          image: docker.io/sidelines/taskflow-frontend:661ff2f
           ports:
             - containerPort: 80
           resources:

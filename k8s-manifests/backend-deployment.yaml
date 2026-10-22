@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: docker.io/sidelines/taskflow-backend:581d820
+          image: docker.io/sidelines/taskflow-backend:661ff2f
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
