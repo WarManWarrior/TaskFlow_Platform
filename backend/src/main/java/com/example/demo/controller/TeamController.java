@@ -167,7 +167,7 @@ public class TeamController {
         TaskAttachment file = attachments.findByIdAndTask_IdAndTask_Team_Id(attachmentId, taskId, teamId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Source file not found."));
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.getFileName().replace("\\"", "") + "\"")
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.getFileName() + "\"")
             .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300")
             .header("X-Content-Type-Options", "nosniff")
             .contentType(MediaType.APPLICATION_OCTET_STREAM)
@@ -378,7 +378,7 @@ public class TeamController {
     }
     private String safeAttachmentName(String raw) {
         if (raw == null || raw.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a file.");
-        String name = raw.replace('\\\\', '/');
+        String name = raw.replace('\\', '/');
         name = name.substring(name.lastIndexOf('/') + 1).replaceAll("[^A-Za-z0-9._ -]", "_").trim();
         if (name.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a valid file name.");
         return name.substring(0, Math.min(name.length(), 160));
