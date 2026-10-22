@@ -148,6 +148,13 @@ export default function TeamsWorkspace({ notify = () => {} }) {
     return counts;
   }, {}), [tasks]);
 
+  useEffect(() => {
+    if (taskProjectFilter !== "all" && taskProjectFilter !== "unassigned" &&
+        !projects.some((project) => String(project.id) === String(taskProjectFilter))) {
+      setTaskProjectFilter("all");
+    }
+  }, [projects, taskProjectFilter]);
+
   const loadTeams = useCallback(async () => {
     setLoadingTeams(true);
     setError("");
@@ -307,7 +314,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
     try {
       const team = await request(API + "/teams", { method: "POST", body: { name } });
       setTeams((current) => [team, ...current.filter((item) => String(item.id) !== String(team.id))]);
-      setActiveTeamId(team.id); setTeamName(""); setTeamDialog("");
+      setActiveTeamId(team.id); setTaskProjectFilter("all"); setActiveTab("projects"); setTeamName(""); setTeamDialog("");
       notify("Team created. Share its code to invite teammates.");
     } catch (e) { setError(e.message || "Couldn't create the team."); }
     finally { setSaving(false); }
@@ -321,7 +328,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
     try {
       const team = await request(API + "/teams/join", { method: "POST", body: { code } });
       setTeams((current) => [team, ...current.filter((item) => String(item.id) !== String(team.id))]);
-      setActiveTeamId(team.id); setJoinCode(""); setTeamDialog("");
+      setActiveTeamId(team.id); setTaskProjectFilter("all"); setActiveTab("projects"); setJoinCode(""); setTeamDialog("");
       notify("You've joined " + team.name + ".");
     } catch (e) { setError(e.message || "Couldn't join that team."); }
     finally { setSaving(false); }
