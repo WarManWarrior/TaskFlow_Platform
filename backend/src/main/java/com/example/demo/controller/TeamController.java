@@ -111,7 +111,8 @@ public class TeamController {
         boolean startDateProvided=body.containsKey("startDate");
         boolean dueDateProvided=body.containsKey("dueDate");
         boolean assigneeProvided=body.containsKey("assigneeId");
-        if(!statusProvided && !projectProvided && !startDateProvided && !dueDateProvided && !assigneeProvided)
+        boolean progressProvided=body.containsKey("progress");
+        if(!statusProvided && !projectProvided && !startDateProvided && !dueDateProvided && !assigneeProvided && !progressProvided)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Provide a task field to update.");
         String oldStatus=task.getStatus();
         Long oldProjectId=task.getProject()==null?null:task.getProject().getId();
@@ -125,6 +126,21 @@ public class TeamController {
         if(dueDateProvided) task.setDueDate(parseDate(body.get("dueDate"), "dueDate"));
         validateTaskDates(task.getStartDate(), task.getDueDate());
         if(assigneeProvided) task.setAssignee(resolveAssignee(teamId, body.get("assigneeId")));
+        if (progressProvided) {
+            int nextProgress;
+            try { nextProgress = Integer.parseInt(body.get("progress")); }
+            catch (RuntimeException ex) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Progress must be a whole number from 0 to 100."); }
+            if (nextProgress < 0 || nextProgress > 100)
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Progress must be between 0 and 100.");
+            task.setProgress(nextProgress);
+            if (!statusProvided) {
+                task.setStatus(nextProgress == 100 ? "DONE" : nextProgress == 0 ? "TODO" : "IN_PROGRESS");
+            }
+        } else if (statusProvided) {
+            if ("DONE".equals(task.getStatus())) task.setProgress(100);
+            else if ("TODO".equals(task.getStatus())) task.setProgress(0);
+            else if (task.getProgress() == null || task.getProgress() == 0) task.setProgress(50);
+        }
         task.setUpdatedBy(actor); task=tasks.save(task);
         if(statusProvided && !Objects.equals(oldStatus,task.getStatus())) {
             activities.save(new TaskActivity(task,actor,"STATUS_CHANGED","moved this task from "+statusLabel(oldStatus)+" to "+statusLabel(task.getStatus())));
@@ -312,6 +328,9 @@ public class TeamController {
         m.put("projectName",t.getProject()==null?null:t.getProject().getName());
         m.put("startDate", t.getStartDate() == null ? null : t.getStartDate().toString());
         m.put("dueDate", t.getDueDate() == null ? null : t.getDueDate().toString());
+        Integer progress = t.getProgress();
+        if (progress == null) progress = "DONE".equals(t.getStatus()) ? 100 : "IN_PROGRESS".equals(t.getStatus()) ? 50 : 0;
+        m.put("progress", progress);
         m.put("assignee", userMap(t.getAssignee()));
         return m;
     }
