@@ -127,8 +127,9 @@ export default function ProjectsWorkspace({ notify = () => {}, onGoToTeams = () 
 
   useEffect(() => {
     let cancelled = false;
+    setProjects([]);
     if (!teamId) {
-      setProjects([]);
+      setLoadingProjects(false);
       return undefined;
     }
     setLoadingProjects(true);
@@ -156,7 +157,8 @@ export default function ProjectsWorkspace({ notify = () => {}, onGoToTeams = () 
   }, [projects, search]);
 
   const summary = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("-");
     return {
       total: projects.length,
       active: projects.filter((project) => project.status === "ACTIVE").length,
@@ -257,7 +259,7 @@ export default function ProjectsWorkspace({ notify = () => {}, onGoToTeams = () 
         <article className={"projects-summary-card" + (summary.overdue ? " is-overdue" : "")}><span>Past target date</span><strong>{summary.overdue}</strong></article>
       </section>
 
-      {error && <div className="projects-error" role="alert">{error}</div>}
+      {error && !formOpen && <div className="projects-error" role="alert">{error}</div>}
 
       {teams.length > 0 ? (
         <>
