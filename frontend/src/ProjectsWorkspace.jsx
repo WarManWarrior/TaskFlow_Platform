@@ -301,7 +301,7 @@ export default function ProjectsWorkspace({ notify = () => {}, onGoToTeams = () 
                   <div className="project-creator"><span>Created by</span><strong>{project.createdBy?.name || "Team member"}</strong></div>
                   <div className="project-card-actions">
                     <button className="secondary-button" type="button" onClick={() => openEdit(project)}>Edit project</button>
-                    <button className="text-button" type="button" onClick={() => deleteProject(project)}>Delete</button>
+                    <button className="project-delete-button" type="button" onClick={() => deleteProject(project)}>Delete</button>
                   </div>
                 </article>
               ))}
