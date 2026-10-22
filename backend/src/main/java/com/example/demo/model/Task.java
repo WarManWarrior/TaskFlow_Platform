@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "tasks")
@@ -29,6 +31,9 @@ public class Task {
     @Column(name = "progress") private Integer progress = 0;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "assignee_id") @JsonIgnore
     private AppUser assignee;
+    @OneToMany(mappedBy = "task", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonIgnore
+    private List<TaskAttachment> attachments = new ArrayList<>();
     @PrePersist protected void onCreate() {
         LocalDateTime now = LocalDateTime.now();
         if (createdAt == null) createdAt = now;
