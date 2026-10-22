@@ -114,7 +114,7 @@
 /* Project planning workspace */
 .projects-page{width:100%;min-width:0;padding-bottom:30px}
 .projects-heading-row{display:flex;align-items:flex-end;justify-content:space-between;gap:22px;margin-bottom:24px}
-.projects-heading-row h1{margin:12px 0 9px;color:var(--ink);font-family:'Space Grotesk',sans-serif;font-size:clamp(28px,2.4vw,36px);font-weight:700;letter-spacing:-1.15px}
+.projects-heading-row h1,.projects-heading-row h2{margin:12px 0 9px;color:var(--ink);font-family:'Space Grotesk',sans-serif;font-size:clamp(28px,2.4vw,36px);font-weight:700;letter-spacing:-1.15px}
 .projects-heading-row .primary-button{flex:0 0 auto}
 .projects-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}
 .projects-summary-card{min-width:0;display:flex;flex-direction:column;gap:12px;padding:18px 19px;border:1px solid var(--softline);border-radius:14px;background:var(--panel)}
