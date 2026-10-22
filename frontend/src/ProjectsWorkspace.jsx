@@ -173,10 +173,6 @@ export default function ProjectsWorkspace({
     }
   }
 
-  if (loadingTeams) {
-    return <section className="projects-page"><div className="projects-loading"><span className="boot-spinner" /><p>Loading your teams…</p></div></section>;
-  }
-
   return (
     <section className="projects-page">
       <div className="projects-heading-row">
