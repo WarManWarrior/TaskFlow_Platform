@@ -26,6 +26,13 @@ public class TeamController {
     private static final Set<String> STATUSES = Set.of("TODO", "IN_PROGRESS", "DONE");
     private static final String ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final String[] COLORS = {"#9B8AFB","#F59E0B","#34D399","#60A5FA","#F472B6","#FB7185","#22D3EE","#A3E635","#C084FC","#F97316"};
+    private static final long MAX_TASK_ATTACHMENT_BYTES = 1024L * 1024L;
+    private static final Set<String> ALLOWED_TASK_FILE_TYPES = Set.of(
+        "application/pdf", "image/png", "image/jpeg", "image/webp", "text/plain",
+        "application/msword", "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     private static final String[] ANIMAL_AVATARS = {"/avatars/doodle-fox.svg","/avatars/doodle-cat.svg","/avatars/doodle-dog.svg","/avatars/doodle-rabbit.svg","/avatars/doodle-panda.svg","/avatars/doodle-penguin.svg","/avatars/doodle-frog.svg","/avatars/doodle-raccoon.svg"};
     private static final Pattern IMAGE_DATA_URL = Pattern.compile("^data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$");
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -37,9 +44,10 @@ public class TeamController {
     private final TaskActivityRepository activities;
     private final ChatMessageRepository chatMessages;
     private final ProjectRepository projects;
+    private final TaskAttachmentRepository attachments;
 
-    public TeamController(AppUserRepository users, TeamRepository teams, TeamMemberRepository members, TaskRepository tasks, TaskCommentRepository comments, TaskActivityRepository activities, ChatMessageRepository chatMessages, ProjectRepository projects) {
-        this.users=users; this.teams=teams; this.members=members; this.tasks=tasks; this.comments=comments; this.activities=activities; this.chatMessages=chatMessages; this.projects=projects;
+    public TeamController(AppUserRepository users, TeamRepository teams, TeamMemberRepository members, TaskRepository tasks, TaskCommentRepository comments, TaskActivityRepository activities, ChatMessageRepository chatMessages, ProjectRepository projects, TaskAttachmentRepository attachments) {
+        this.users=users; this.teams=teams; this.members=members; this.tasks=tasks; this.comments=comments; this.activities=activities; this.chatMessages=chatMessages; this.projects=projects; this.attachments=attachments;
     }
 
     @GetMapping @Transactional(readOnly=true)
@@ -86,6 +94,23 @@ public class TeamController {
         }
         return result.stream().map(this::taskMap).toList();
     }
+    @GetMapping("/{teamId}/attachments") @Transactional(readOnly=true)
+    public List<Map<String,Object>> listTeamAttachments(@PathVariable Long teamId, Authentication auth) {
+        requireMembership(teamId, currentUser(auth));
+        return attachments.findSummariesByTeamId(teamId).stream().map(item -> {
+            Map<String,Object> result = new LinkedHashMap<>();
+            result.put("id", item.getId());
+            result.put("taskId", item.getTaskId());
+            result.put("fileName", item.getFileName());
+            result.put("contentType", item.getContentType());
+            result.put("fileSize", item.getFileSize());
+            result.put("createdAt", time(item.getCreatedAt()));
+            result.put("uploadedByName", item.getUploadedByName());
+            result.put("url", "/api/teams/" + teamId + "/tasks/" + item.getTaskId() + "/attachments/" + item.getId() + "/file");
+            return result;
+        }).toList();
+    }
+
     @PostMapping("/{teamId}/tasks") @Transactional
     public Map<String,Object> createTeamTask(@PathVariable Long teamId,@RequestBody Map<String,String> body,Authentication auth) {
         AppUser actor=currentUser(auth); Team team=requireMembership(teamId,actor);
@@ -102,6 +127,67 @@ public class TeamController {
         String detail = task.getProject() == null ? "created this shared task" : "created a task in project " + task.getProject().getName();
         activities.save(new TaskActivity(task,actor,"TASK_CREATED",detail)); return taskMap(task);
     }
+    @PostMapping("/{teamId}/tasks/{taskId}/attachments") @Transactional
+    public Map<String,Object> uploadTaskAttachment(@PathVariable Long teamId, @PathVariable Long taskId,
+            @RequestBody Map<String,String> body, Authentication auth) {
+        AppUser actor = currentUser(auth);
+        requireMembership(teamId, actor);
+        Task task = requireTeamTask(teamId, taskId);
+        String fileName = safeAttachmentName(body.get("fileName"));
+        String contentType = body.get("contentType") == null ? "" : body.get("contentType").trim().toLowerCase(Locale.ROOT);
+        String encoded = body.get("data");
+        if (!ALLOWED_TASK_FILE_TYPES.contains(contentType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a PDF, image, text, Word, Excel, or PowerPoint file.");
+        }
+        if (encoded == null || encoded.isBlank() || encoded.length() > (MAX_TASK_ATTACHMENT_BYTES * 4 / 3) + 8) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Files must be 1 MB or smaller.");
+        }
+        byte[] data;
+        try { data = Base64.getDecoder().decode(encoded); }
+        catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That file could not be read.");
+        }
+        if (data.length == 0 || data.length > MAX_TASK_ATTACHMENT_BYTES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Files must be between 1 byte and 1 MB.");
+        }
+        String lowerName = fileName.toLowerCase(Locale.ROOT);
+        boolean validExtension = Set.of(".pdf", ".png", ".jpg", ".jpeg", ".webp", ".txt", ".doc", ".docx", ".xls", ".xlsx", ".pptx")
+            .stream().anyMatch(lowerName::endsWith);
+        if (!validExtension) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a supported document or image file.");
+        TaskAttachment saved = attachments.save(new TaskAttachment(task, actor, fileName, contentType, data));
+        activities.save(new TaskActivity(task, actor, "FILE_ATTACHED", "attached source file " + fileName));
+        return attachmentMap(saved, teamId);
+    }
+
+    @GetMapping("/{teamId}/tasks/{taskId}/attachments/{attachmentId}/file")
+    @Transactional(readOnly=true)
+    public ResponseEntity<byte[]> downloadTaskAttachment(@PathVariable Long teamId, @PathVariable Long taskId,
+            @PathVariable Long attachmentId, Authentication auth) {
+        requireMembership(teamId, currentUser(auth));
+        TaskAttachment file = attachments.findByIdAndTask_IdAndTask_Team_Id(attachmentId, taskId, teamId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Source file not found."));
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.getFileName().replace("\\"", "") + "\"")
+            .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300")
+            .header("X-Content-Type-Options", "nosniff")
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .body(file.getFileData());
+    }
+
+    @DeleteMapping("/{teamId}/tasks/{taskId}/attachments/{attachmentId}")
+    @Transactional
+    public ResponseEntity<Void> deleteTaskAttachment(@PathVariable Long teamId, @PathVariable Long taskId,
+            @PathVariable Long attachmentId, Authentication auth) {
+        AppUser actor = currentUser(auth);
+        requireMembership(teamId, actor);
+        Task task = requireTeamTask(teamId, taskId);
+        TaskAttachment file = attachments.findByIdAndTask_IdAndTask_Team_Id(attachmentId, taskId, teamId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Source file not found."));
+        attachments.delete(file);
+        activities.save(new TaskActivity(task, actor, "FILE_REMOVED", "removed source file " + file.getFileName()));
+        return ResponseEntity.noContent().build();
+    }
+
     @PatchMapping("/{teamId}/tasks/{taskId}") @Transactional
     public Map<String,Object> updateTeamTask(@PathVariable Long teamId,@PathVariable Long taskId,@RequestBody Map<String,String> body,Authentication auth) {
         AppUser actor=currentUser(auth); requireMembership(teamId,actor);
@@ -277,6 +363,25 @@ public class TeamController {
     }
     private Task requireTeamTask(Long teamId,Long taskId) {
         return tasks.findByIdAndTeam_Id(taskId,teamId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Team task not found."));
+    }
+    private Map<String,Object> attachmentMap(TaskAttachment file, Long teamId) {
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("id", file.getId());
+        result.put("taskId", file.getTask().getId());
+        result.put("fileName", file.getFileName());
+        result.put("contentType", file.getContentType());
+        result.put("fileSize", file.getFileSize());
+        result.put("createdAt", time(file.getCreatedAt()));
+        result.put("uploadedByName", file.getUploadedBy().getName());
+        result.put("url", "/api/teams/" + teamId + "/tasks/" + file.getTask().getId() + "/attachments/" + file.getId() + "/file");
+        return result;
+    }
+    private String safeAttachmentName(String raw) {
+        if (raw == null || raw.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a file.");
+        String name = raw.replace('\\\\', '/');
+        name = name.substring(name.lastIndexOf('/') + 1).replaceAll("[^A-Za-z0-9._ -]", "_").trim();
+        if (name.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a valid file name.");
+        return name.substring(0, Math.min(name.length(), 160));
     }
     private Project resolveProject(Long teamId,String rawProjectId) {
         if(rawProjectId==null || rawProjectId.isBlank()) return null;
