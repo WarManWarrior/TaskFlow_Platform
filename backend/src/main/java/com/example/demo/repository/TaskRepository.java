@@ -13,7 +13,9 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     List<Task> findAllByUser_IdAndTeamIsNullOrderByIdDesc(Long userId);
     Optional<Task> findByIdAndUser_IdAndTeamIsNull(Long id, Long userId);
     List<Task> findAllByTeam_IdOrderByCreatedAtDesc(Long teamId);
+    List<Task> findAllByTeam_IdAndProject_IdOrderByCreatedAtDesc(Long teamId, Long projectId);
     Optional<Task> findByIdAndTeam_Id(Long id, Long teamId);
+    long countByProject_Id(Long projectId);
     @Modifying
     @Query("update Task task set task.user = :user where task.user is null")
     int assignUnownedTasksToUser(@Param("user") AppUser user);
