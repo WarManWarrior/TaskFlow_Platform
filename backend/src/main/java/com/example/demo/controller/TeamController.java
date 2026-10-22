@@ -34,9 +34,10 @@ public class TeamController {
     private final TaskCommentRepository comments;
     private final TaskActivityRepository activities;
     private final ChatMessageRepository chatMessages;
+    private final ProjectRepository projects;
 
-    public TeamController(AppUserRepository users, TeamRepository teams, TeamMemberRepository members, TaskRepository tasks, TaskCommentRepository comments, TaskActivityRepository activities, ChatMessageRepository chatMessages) {
-        this.users=users; this.teams=teams; this.members=members; this.tasks=tasks; this.comments=comments; this.activities=activities; this.chatMessages=chatMessages;
+    public TeamController(AppUserRepository users, TeamRepository teams, TeamMemberRepository members, TaskRepository tasks, TaskCommentRepository comments, TaskActivityRepository activities, ChatMessageRepository chatMessages, ProjectRepository projects) {
+        this.users=users; this.teams=teams; this.members=members; this.tasks=tasks; this.comments=comments; this.activities=activities; this.chatMessages=chatMessages; this.projects=projects;
     }
 
     @GetMapping @Transactional(readOnly=true)
@@ -70,8 +71,18 @@ public class TeamController {
         }).toList();
     }
     @GetMapping("/{teamId}/tasks") @Transactional(readOnly=true)
-    public List<Map<String,Object>> listTeamTasks(@PathVariable Long teamId, Authentication auth) {
-        requireMembership(teamId,currentUser(auth)); return tasks.findAllByTeam_IdOrderByCreatedAtDesc(teamId).stream().map(this::taskMap).toList();
+    public List<Map<String,Object>> listTeamTasks(@PathVariable Long teamId, @RequestParam(required=false) Long projectId, Authentication auth) {
+        requireMembership(teamId,currentUser(auth));
+        List<Task> result;
+        if (projectId == null) {
+            result = tasks.findAllByTeam_IdOrderByCreatedAtDesc(teamId);
+        } else {
+            if (projects.findByIdAndTeam_Id(projectId, teamId).isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found for this team.");
+            }
+            result = tasks.findAllByTeam_IdAndProject_IdOrderByCreatedAtDesc(teamId, projectId);
+        }
+        return result.stream().map(this::taskMap).toList();
     }
     @PostMapping("/{teamId}/tasks") @Transactional
     public Map<String,Object> createTeamTask(@PathVariable Long teamId,@RequestBody Map<String,String> body,Authentication auth) {
@@ -79,16 +90,36 @@ public class TeamController {
         String title=trim(body.get("title")), description=trim(body.get("description"));
         if(title.isBlank()||title.length()>120) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Task title must be between 1 and 120 characters.");
         if(description.length()>1000) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Description must be 1000 characters or fewer.");
-        Task task=new Task(title,description,"TODO"); task.setTeam(team); task.setUser(actor); task.setUpdatedBy(actor); task=tasks.save(task);
-        activities.save(new TaskActivity(task,actor,"TASK_CREATED","created this shared task")); return taskMap(task);
+        Task task=new Task(title,description,"TODO"); task.setTeam(team); task.setUser(actor); task.setUpdatedBy(actor);
+        task.setProject(resolveProject(teamId, body.get("projectId")));
+        task=tasks.save(task);
+        String detail = task.getProject() == null ? "created this shared task" : "created a task in project " + task.getProject().getName();
+        activities.save(new TaskActivity(task,actor,"TASK_CREATED",detail)); return taskMap(task);
     }
     @PatchMapping("/{teamId}/tasks/{taskId}") @Transactional
     public Map<String,Object> updateTeamTask(@PathVariable Long teamId,@PathVariable Long taskId,@RequestBody Map<String,String> body,Authentication auth) {
         AppUser actor=currentUser(auth); requireMembership(teamId,actor);
         Task task=tasks.findByIdAndTeam_Id(taskId,teamId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Team task not found."));
-        String next=body.get("status"); if(next==null||!STATUSES.contains(next)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Choose a valid task status.");
-        String old=task.getStatus(); task.setStatus(next); task.setUpdatedBy(actor); task=tasks.save(task);
-        if(!Objects.equals(old,next)) activities.save(new TaskActivity(task,actor,"STATUS_CHANGED","moved this task from "+statusLabel(old)+" to "+statusLabel(next)));
+        boolean statusProvided=body.containsKey("status");
+        boolean projectProvided=body.containsKey("projectId");
+        if(!statusProvided && !projectProvided) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Provide a status or project assignment to update.");
+        String oldStatus=task.getStatus();
+        Long oldProjectId=task.getProject()==null?null:task.getProject().getId();
+        if(statusProvided) {
+            String next=body.get("status");
+            if(next==null||!STATUSES.contains(next)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Choose a valid task status.");
+            task.setStatus(next);
+        }
+        if(projectProvided) task.setProject(resolveProject(teamId,body.get("projectId")));
+        task.setUpdatedBy(actor); task=tasks.save(task);
+        if(statusProvided && !Objects.equals(oldStatus,task.getStatus())) {
+            activities.save(new TaskActivity(task,actor,"STATUS_CHANGED","moved this task from "+statusLabel(oldStatus)+" to "+statusLabel(task.getStatus())));
+        }
+        Long newProjectId=task.getProject()==null?null:task.getProject().getId();
+        if(projectProvided && !Objects.equals(oldProjectId,newProjectId)) {
+            String projectName=task.getProject()==null?"the unassigned task list": "project "+task.getProject().getName();
+            activities.save(new TaskActivity(task,actor,"PROJECT_CHANGED","moved this task to "+projectName));
+        }
         return taskMap(task);
     }
     @GetMapping("/{teamId}/tasks/{taskId}/comments") @Transactional(readOnly=true)
@@ -217,6 +248,16 @@ public class TeamController {
     private Task requireTeamTask(Long teamId,Long taskId) {
         return tasks.findByIdAndTeam_Id(taskId,teamId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Team task not found."));
     }
+    private Project resolveProject(Long teamId,String rawProjectId) {
+        if(rawProjectId==null || rawProjectId.isBlank()) return null;
+        try {
+            Long projectId=Long.valueOf(rawProjectId.trim());
+            return projects.findByIdAndTeam_Id(projectId,teamId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Project not found for this team."));
+        } catch(NumberFormatException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Choose a valid project.");
+        }
+    }
     private AppUser currentUser(Authentication auth) {
         if(auth==null||auth.getName()==null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Please sign in.");
         return users.findByEmailIgnoreCase(auth.getName()).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Account not found."));
@@ -231,6 +272,8 @@ public class TeamController {
         m.put("id",t.getId()); m.put("title",t.getTitle()); m.put("description",t.getDescription()); m.put("status",t.getStatus());
         m.put("createdAt",time(t.getCreatedAt())); m.put("updatedAt",time(t.getUpdatedAt()));
         m.put("createdBy",userMap(t.getUser())); m.put("updatedBy",userMap(t.getUpdatedBy())); m.put("teamId",t.getTeam()==null?null:t.getTeam().getId());
+        m.put("projectId",t.getProject()==null?null:t.getProject().getId());
+        m.put("projectName",t.getProject()==null?null:t.getProject().getName());
         return m;
     }
     private Map<String,Object> userMap(AppUser u) {
