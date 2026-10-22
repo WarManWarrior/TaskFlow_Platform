@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { imageFileToDataUrl } from "./imageUtils";
+import ProjectsWorkspace from "./ProjectsWorkspace";
 
 const API = "/api";
 const STATUSES = [
@@ -50,7 +51,7 @@ function initials(name) {
 
 export default function TeamsWorkspace({ notify = () => {} }) {
   const [teams, setTeams] = useState([]);
-  const [activeTab, setActiveTab] = useState("tasks");
+  const [activeTab, setActiveTab] = useState("projects");
   const [chatMessages, setChatMessages] = useState([]);
   const [chatDraft, setChatDraft] = useState("");
   const [chatImageData, setChatImageData] = useState("");
@@ -114,6 +115,8 @@ export default function TeamsWorkspace({ notify = () => {} }) {
   const [activeTeamId, setActiveTeamId] = useState(null);
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [taskProjectFilter, setTaskProjectFilter] = useState("all");
   const [activity, setActivity] = useState([]);
   const [comments, setComments] = useState([]);
   const [selectedTask, setSelectedTask] = useState(null);
@@ -124,6 +127,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
   const [taskDialog, setTaskDialog] = useState(false);
   const [taskTitle, setTaskTitle] = useState("");
   const [taskDescription, setTaskDescription] = useState("");
+  const [taskProjectId, setTaskProjectId] = useState("");
   const [loadingTeams, setLoadingTeams] = useState(true);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -133,7 +137,16 @@ export default function TeamsWorkspace({ notify = () => {} }) {
   const workspaceRequestsRef = useRef(new Set());
 
   const activeTeam = useMemo(() => teams.find((team) => String(team.id) === String(activeTeamId)) || null, [teams, activeTeamId]);
-  const board = useMemo(() => STATUSES.map((status) => ({ ...status, tasks: tasks.filter((task) => String(task.status || "TODO").toUpperCase() === status.value) })), [tasks]);
+  const visibleTasks = useMemo(() => {
+    if (taskProjectFilter === "all") return tasks;
+    if (taskProjectFilter === "unassigned") return tasks.filter((task) => !task.projectId);
+    return tasks.filter((task) => String(task.projectId || "") === String(taskProjectFilter));
+  }, [tasks, taskProjectFilter]);
+  const board = useMemo(() => STATUSES.map((status) => ({ ...status, tasks: visibleTasks.filter((task) => String(task.status || "TODO").toUpperCase() === status.value) })), [visibleTasks]);
+  const projectTaskCounts = useMemo(() => tasks.reduce((counts, task) => {
+    if (task.projectId != null) counts[task.projectId] = (counts[task.projectId] || 0) + 1;
+    return counts;
+  }, {}), [tasks]);
 
   const loadTeams = useCallback(async () => {
     setLoadingTeams(true);
@@ -158,10 +171,11 @@ export default function TeamsWorkspace({ notify = () => {} }) {
     if (!silent) setLoadingWorkspace(true);
 
     try {
-      const [taskResult, memberResult, activityResult] = await Promise.all([
+      const [taskResult, memberResult, activityResult, projectResult] = await Promise.all([
         request(API + "/teams/" + teamId + "/tasks"),
         request(API + "/teams/" + teamId + "/members"),
         request(API + "/teams/" + teamId + "/activity"),
+        request(API + "/teams/" + teamId + "/projects"),
       ]);
 
       // Ignore responses from a team the user has switched away from.
@@ -174,6 +188,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
       }));
       setMembers(Array.isArray(memberResult) ? memberResult : []);
       setActivity(Array.isArray(activityResult) ? activityResult : []);
+      setProjects(Array.isArray(projectResult) ? projectResult : []);
     } catch (e) {
       if (!silent && String(activeTeamId) === teamKey) {
         setError(e.message || "Couldn't load this team's workspace.");
@@ -187,13 +202,13 @@ export default function TeamsWorkspace({ notify = () => {} }) {
   useEffect(() => { loadTeams(); }, [loadTeams]);
   useEffect(() => {
     if (activeTeamId) loadWorkspace(activeTeamId);
-    else { setTasks([]); setMembers([]); setActivity([]); }
+    else { setTasks([]); setProjects([]); setMembers([]); setActivity([]); }
   }, [activeTeamId, loadWorkspace]);
 
   // Quiet polling updates shared tasks, teammates, and recent activity without
   // showing skeletons or resetting the board. Stop while the chat tab is active.
   useEffect(() => {
-    if (!activeTeamId || activeTab !== "tasks") return undefined;
+    if (!activeTeamId || (activeTab !== "tasks" && activeTab !== "projects")) return undefined;
     const teamId = activeTeamId;
     const timer = window.setInterval(() => {
       loadWorkspace(teamId, { silent: true });
@@ -327,9 +342,9 @@ export default function TeamsWorkspace({ notify = () => {} }) {
     if (!title || !activeTeamId) return;
     setSaving(true); setError("");
     try {
-      const task = await request(API + "/teams/" + activeTeamId + "/tasks", { method: "POST", body: { title, description: taskDescription.trim() } });
+      const task = await request(API + "/teams/" + activeTeamId + "/tasks", { method: "POST", body: { title, description: taskDescription.trim(), projectId: taskProjectId || null } });
       setTasks((current) => [task, ...current]);
-      setTaskTitle(""); setTaskDescription(""); setTaskDialog(false);
+      setTaskTitle(""); setTaskDescription(""); setTaskProjectId(""); setTaskDialog(false);
       const feed = await request(API + "/teams/" + activeTeamId + "/activity");
       setActivity(Array.isArray(feed) ? feed : []);
       notify("Shared task created.");
@@ -354,6 +369,36 @@ export default function TeamsWorkspace({ notify = () => {} }) {
     }
   }
 
+  async function updateTaskProject(task, projectId) {
+    const nextProjectId = projectId ? String(projectId) : null;
+    if (!activeTeamId || busyIds.has(task.id) || String(task.projectId || "") === String(nextProjectId || "")) return;
+    busyTaskIdsRef.current.add(task.id);
+    setBusyIds((current) => new Set(current).add(task.id));
+    try {
+      const updated = await request(API + "/teams/" + activeTeamId + "/tasks/" + task.id, {
+        method: "PATCH",
+        body: { projectId: nextProjectId },
+      });
+      setTasks((current) => current.map((item) => item.id === task.id ? updated : item));
+      const feed = await request(API + "/teams/" + activeTeamId + "/activity");
+      setActivity(Array.isArray(feed) ? feed : []);
+      notify(nextProjectId ? "Task added to project." : "Task moved to the unassigned list.");
+    } catch (e) {
+      notify(e.message || "Couldn't change the task's project.", "error");
+    } finally {
+      busyTaskIdsRef.current.delete(task.id);
+      setBusyIds((current) => { const next = new Set(current); next.delete(task.id); return next; });
+    }
+  }
+
+  function openTaskDialog() {
+    setError("");
+    setTaskTitle("");
+    setTaskDescription("");
+    setTaskProjectId(taskProjectFilter !== "all" && taskProjectFilter !== "unassigned" ? String(taskProjectFilter) : "");
+    setTaskDialog(true);
+  }
+
   async function postComment(event) {
     event.preventDefault();
     const body = commentDraft.trim();
@@ -373,7 +418,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
   return (
     <section className="teams-page">
       <div className="teams-heading">
-        <div><div className="eyebrow"><span className="eyebrow-line" />WORK BETTER TOGETHER</div><h1>Teams<span className="heading-period">.</span></h1><p className="page-subtitle">Shared tasks, visible progress, and every teammate's contribution in one place.</p></div>
+        <div><div className="eyebrow"><span className="eyebrow-line" />PROJECT PLANNING & TEAMWORK</div><h1>Projects<span className="heading-period">.</span></h1><p className="page-subtitle">Plan projects, organize shared tasks, and coordinate with your team in one place.</p></div>
         <div className="teams-heading-actions"><button className="secondary-button" onClick={() => { setTeamDialog("join"); setError(""); }}>↗ Join team</button><button className="primary-button" onClick={() => { setTeamDialog("create"); setError(""); }}>＋ Create team</button></div>
       </div>
 
@@ -384,7 +429,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
           <div className="team-picker-heading"><span>YOUR TEAMS</span><span className="nav-count">{teams.length}</span></div>
           {loadingTeams ? <div className="team-picker-empty">Loading teams…</div> : teams.length === 0 ?
             <div className="team-picker-empty"><div className="team-empty-mark">✳</div><strong>No teams yet</strong><p>Create a team or join one with a team code.</p><button className="secondary-button" onClick={() => { setTeamDialog("create"); setError(""); }}>Get started</button></div> :
-            <div className="team-picker-list">{teams.map((team) => <button key={team.id} className={"team-picker-item" + (String(activeTeamId) === String(team.id) ? " selected" : "")} onClick={() => setActiveTeamId(team.id)}><span className="team-icon">{initials(team.name).slice(0,2)}</span><span className="team-picker-copy"><strong>{team.name}</strong><small>{team.memberCount} {team.memberCount === 1 ? "member" : "members"}</small></span><span aria-hidden="true">›</span></button>)}</div>}
+            <div className="team-picker-list">{teams.map((team) => <button key={team.id} className={"team-picker-item" + (String(activeTeamId) === String(team.id) ? " selected" : "")} onClick={() => { setActiveTeamId(team.id); setTaskProjectFilter("all"); setActiveTab("projects"); }}><span className="team-icon">{initials(team.name).slice(0,2)}</span><span className="team-picker-copy"><strong>{team.name}</strong><small>{team.memberCount} {team.memberCount === 1 ? "member" : "members"}</small></span><span aria-hidden="true">›</span></button>)}</div>}
           <div className="team-picker-footer"><button onClick={() => { setTeamDialog("create"); setError(""); }}>＋ Create a team</button><button onClick={() => { setTeamDialog("join"); setError(""); }}>↗ Join with code</button></div>
         </aside>
 
@@ -396,14 +441,28 @@ export default function TeamsWorkspace({ notify = () => {} }) {
 
           <section className="team-members-strip"><div><div className="team-section-kicker">THE PEOPLE</div><h3>Your teammates</h3></div><div className="team-member-stack">{members.map((member) => <span className="team-member-person" key={member.user.id}><Avatar user={member.user} size={36} /><span>{member.user.name}</span><small>{member.role.toLowerCase()}</small></span>)}</div></section>
 
-          <div className="team-view-tabs" role="tablist" aria-label="Team workspace">
-            <button type="button" role="tab" aria-selected={activeTab === "tasks"} className={activeTab === "tasks" ? "active" : ""} onClick={() => setActiveTab("tasks")}>▦ Shared tasks <span>{tasks.length}</span></button>
+          <div className="team-view-tabs" role="tablist" aria-label="Project workspace">
+            <button type="button" role="tab" aria-selected={activeTab === "projects"} className={activeTab === "projects" ? "active" : ""} onClick={() => setActiveTab("projects")}>▦ Projects <span>{projects.length}</span></button>
+            <button type="button" role="tab" aria-selected={activeTab === "tasks"} className={activeTab === "tasks" ? "active" : ""} onClick={() => setActiveTab("tasks")}>☷ Shared tasks <span>{tasks.length}</span></button>
             <button type="button" role="tab" aria-selected={activeTab === "chat"} className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>◌ Team chat <span>{members.length}</span></button>
           </div>
 
-          {activeTab === "tasks" ? <>
+          {activeTab === "projects" ? <ProjectsWorkspace
+            teamId={activeTeam.id}
+            projects={projects}
+            setProjects={setProjects}
+            loadingProjects={loadingWorkspace}
+            onRefresh={() => loadWorkspace(activeTeam.id)}
+            onViewTasks={(projectId) => { setTaskProjectFilter(String(projectId)); setActiveTab("tasks"); }}
+            taskCounts={projectTaskCounts}
+            notify={notify}
+          /> : activeTab === "tasks" ? <>
             <section className="team-shared-board">
-              <div className="team-section-heading"><div><div className="team-section-kicker">IN SYNC</div><h3>Shared task board <span className="board-total">{tasks.length}</span></h3><p>Tasks and activity refresh automatically every 5 seconds.</p></div><div className="team-board-actions"><button className="secondary-button" disabled={loadingWorkspace} onClick={() => loadWorkspace(activeTeam.id)}>↻ Refresh</button><button className="primary-button" onClick={() => { setError(""); setTaskTitle(""); setTaskDescription(""); setTaskDialog(true); }}>＋ Shared task</button></div></div>
+              <div className="team-section-heading"><div><div className="team-section-kicker">IN SYNC</div><h3>Shared task board <span className="board-total">{visibleTasks.length}</span></h3><p>Tasks and activity refresh automatically every 5 seconds.</p></div><div className="team-board-actions">
+                <label className="team-project-filter"><span>Project</span><select aria-label="Filter shared tasks by project" value={taskProjectFilter} onChange={(event) => setTaskProjectFilter(event.target.value)}><option value="all">All projects</option><option value="unassigned">Unassigned</option>{projects.map((project) => <option key={project.id} value={String(project.id)}>{project.name}</option>)}</select></label>
+                <button className="secondary-button" disabled={loadingWorkspace} onClick={() => loadWorkspace(activeTeam.id)}>↻ Refresh</button>
+                <button className="primary-button" onClick={openTaskDialog}>＋ Shared task</button>
+              </div></div>
 
               <div className="kanban-grid team-kanban-grid">{board.map((column) => <section className={"kanban-column column-" + column.tone} key={column.value}>
                 <div className="column-heading"><div className="column-title-group"><span className={"column-status-dot " + column.tone}><span className="status-indicator" /></span><h3>{column.label}</h3><span className="column-count">{column.tasks.length}</span></div></div>
@@ -414,10 +473,11 @@ export default function TeamsWorkspace({ notify = () => {} }) {
                     <div className="task-card-top"><span className="task-id">TEAM-{String(task.id).padStart(3,"0")}</span><button className="discussion-button" onClick={() => { setSelectedTask(task); setComments([]); setCommentDraft(""); }}>Comment</button></div>
                     <h4>{task.title}</h4><p className={"task-description" + (!task.description ? " no-description" : "")}>{task.description || "No description added."}</p>
                     <div className="team-task-activity-tag"><Avatar user={actor} size={25} /><span><strong>{actor?.name || "Team member"}</strong><small>{task.updatedAt ? new Date(task.updatedAt).toLocaleString() : "Task created"}</small></span></div>
+                    <div className="team-task-project"><label><span>Project</span><select aria-label={"Assign " + task.title + " to project"} value={task.projectId == null ? "" : String(task.projectId)} disabled={busy} onChange={(event) => updateTaskProject(task,event.target.value)}><option value="">Unassigned</option>{projects.map((project) => <option key={project.id} value={String(project.id)}>{project.name}</option>)}</select></label></div>
                     <div className="task-card-bottom"><span className={"task-status-label " + column.tone}><span className="status-indicator" />{column.label}</span><label className="status-select-wrap"><span className="visually-hidden">Change status for {task.title}</span><select aria-label={"Change status for " + task.title} value={String(task.status || "TODO").toUpperCase()} disabled={busy} onChange={(event) => updateStatus(task,event.target.value)}>{STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select><span className="status-chevron">⌄</span></label></div>
                   </article>;
                 })}</div>
-                {column.value === "TODO" && <button className="add-card-button" onClick={() => { setTaskTitle(""); setTaskDescription(""); setTaskDialog(true); }}>＋ Add shared task</button>}
+                {column.value === "TODO" && <button className="add-card-button" onClick={openTaskDialog}>＋ Add shared task</button>}
               </section>)}</div>
             </section>
 
@@ -450,7 +510,7 @@ export default function TeamsWorkspace({ notify = () => {} }) {
 
       {teamDialog && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setTeamDialog(""); }}><section className="create-modal" role="dialog" aria-modal="true" aria-labelledby="team-dialog-title"><div className="modal-heading"><span className="modal-icon">{teamDialog === "create" ? "✳" : "↗"}</span><button className="icon-button modal-close" aria-label="Close team form" disabled={saving} onClick={() => setTeamDialog("")}>×</button><div className="eyebrow">TEAM WORKSPACE</div><h2 id="team-dialog-title">{teamDialog === "create" ? "Create a team" : "Join a team"}</h2><p>{teamDialog === "create" ? "Start a shared space and invite others with your unique code." : "Enter the invite code shared by your teammate."}</p></div><form className="create-form" onSubmit={teamDialog === "create" ? createTeam : joinTeam}>{teamDialog === "create" ? <label className="form-field"><span>Team name <em>*</em></span><input autoFocus maxLength={100} placeholder="e.g. Project Nova" value={teamName} onChange={(event) => setTeamName(event.target.value)} required /></label> : <label className="form-field"><span>Team code <em>*</em></span><input autoFocus maxLength={9} placeholder="ABCD-EFGH" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} required /></label>}{error && <div className="form-error" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={saving} onClick={() => setTeamDialog("")}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Please wait…" : teamDialog === "create" ? "Create team" : "Join team"}</button></div></form></section></div>}
 
-      {taskDialog && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setTaskDialog(false); }}><section className="create-modal" role="dialog" aria-modal="true" aria-labelledby="shared-task-title"><div className="modal-heading"><span className="modal-icon">＋</span><button className="icon-button modal-close" aria-label="Close shared task form" disabled={saving} onClick={() => setTaskDialog(false)}>×</button><div className="eyebrow">TEAM TASK</div><h2 id="shared-task-title">Create a shared task</h2><p>This task and its activity will be visible to all members.</p></div><form className="create-form" onSubmit={createTask}><label className="form-field"><span>Task title <em>*</em></span><input autoFocus maxLength={120} value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} placeholder="e.g. Prepare the team review" required /></label><label className="form-field"><span>Description <small>OPTIONAL</small></span><textarea rows={3} maxLength={1000} value={taskDescription} onChange={(event) => setTaskDescription(event.target.value)} placeholder="Add context for your teammates…" /></label>{error && <div className="form-error" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={saving} onClick={() => setTaskDialog(false)}>Cancel</button><button type="submit" className="primary-button" disabled={saving || !taskTitle.trim()}>{saving ? "Saving…" : "Create shared task"}</button></div></form></section></div>}
+      {taskDialog && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setTaskDialog(false); }}><section className="create-modal" role="dialog" aria-modal="true" aria-labelledby="shared-task-title"><div className="modal-heading"><span className="modal-icon">＋</span><button className="icon-button modal-close" aria-label="Close shared task form" disabled={saving} onClick={() => setTaskDialog(false)}>×</button><div className="eyebrow">TEAM TASK</div><h2 id="shared-task-title">Create a shared task</h2><p>This task and its activity will be visible to all members.</p></div><form className="create-form" onSubmit={createTask}><label className="form-field"><span>Task title <em>*</em></span><input autoFocus maxLength={120} value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} placeholder="e.g. Prepare the team review" required /></label><label className="form-field"><span>Description <small>OPTIONAL</small></span><textarea rows={3} maxLength={1000} value={taskDescription} onChange={(event) => setTaskDescription(event.target.value)} placeholder="Add context for your teammates…" /></label><label className="form-field"><span>Project <small>OPTIONAL</small></span><select value={taskProjectId} onChange={(event) => setTaskProjectId(event.target.value)}><option value="">Unassigned</option>{projects.map((project) => <option key={project.id} value={String(project.id)}>{project.name}</option>)}</select></label>{error && <div className="form-error" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={saving} onClick={() => setTaskDialog(false)}>Cancel</button><button type="submit" className="primary-button" disabled={saving || !taskTitle.trim()}>{saving ? "Saving…" : "Create shared task"}</button></div></form></section></div>}
 
       {selectedTask && activeTeam && <div className="modal-backdrop discussion-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedTask(null); }}><section className="discussion-modal" role="dialog" aria-modal="true" aria-labelledby="discussion-title"><div className="discussion-heading"><div><div className="team-section-kicker">TEAM DISCUSSION</div><h2 id="discussion-title">{selectedTask.title}</h2><p>{activeTeam.name} · Shared with all team members.</p></div><button className="icon-button" aria-label="Close discussion" onClick={() => setSelectedTask(null)}>×</button></div><div className="discussion-comments">{comments.length === 0 ? <div className="activity-empty">No comments yet. Start the conversation.</div> : comments.map((comment) => <article className="comment-item" key={comment.id} style={{ "--actor-color": comment.author?.avatarColor || "var(--purple)" }}><Avatar user={comment.author} size={34} /><div className="comment-content"><div className="comment-meta"><strong>{comment.author?.name || "Team member"}</strong><time>{comment.createdAt ? new Date(comment.createdAt).toLocaleString() : ""}</time></div><p>{comment.body}</p></div></article>)}</div><form className="comment-form" onSubmit={postComment}><textarea value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} maxLength={1000} rows={3} placeholder="Write a comment for your teammates…" required /><div><small>{commentDraft.length}/1000</small><button className="primary-button" type="submit" disabled={saving || !commentDraft.trim()}>{saving ? "Posting…" : "Post comment"}</button></div></form></section></div>}
     </section>
