@@ -21,6 +21,8 @@ const dateLabel = (value, options = { month: "short", day: "numeric" }) => {
 };
 const statusLabel = (value) => TASK_STATUSES.find((item) => item.value === String(value || "").toUpperCase())?.label || "To do";
 const dayMs = 86400000;
+const localDateKey = (value) => value.getFullYear() + "-" + String(value.getMonth() + 1).padStart(2, "0") + "-" + String(value.getDate()).padStart(2, "0");
+const todayKey = () => localDateKey(new Date());
 
 async function csrfToken() {
   const response = await fetch(API + "/auth/csrf", { credentials: "same-origin", headers: { Accept: "application/json" } });
@@ -128,7 +130,7 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
     const openTasks = tasks.filter((task) => String(task.status).toUpperCase() !== "DONE");
     const dueDates = openTasks.map((task) => task.dueDate).filter(Boolean).sort();
     const targetDate = project.targetDate || dueDates[0] || null;
-    const overdue = Boolean(targetDate && targetDate < new Date().toISOString().slice(0, 10) && project.status !== "COMPLETED" && progress < 100);
+    const overdue = Boolean(targetDate && targetDate < todayKey() && project.status !== "COMPLETED" && progress < 100);
     return { ...project, completed, inProgress, todo, progress, targetDate, overdue };
   }).sort((a, b) => {
     if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
@@ -146,7 +148,7 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
   const overallProgress = allTasks.length ? Math.round(statusCounts.done / allTasks.length * 100) : 0;
   const activeProjects = projects.filter((project) => project.status === "ACTIVE").length;
   const completedProjects = projects.filter((project) => project.status === "COMPLETED").length;
-  const overdueTasks = allTasks.filter((task) => task.dueDate && task.dueDate < new Date().toISOString().slice(0, 10) && String(task.status).toUpperCase() !== "DONE").length;
+  const overdueTasks = allTasks.filter((task) => task.dueDate && task.dueDate < todayKey() && String(task.status).toUpperCase() !== "DONE").length;
 
   const monthlyActivity = useMemo(() => {
     const now = new Date();
@@ -173,8 +175,8 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
     const end = new Date(start.getTime() + 27 * dayMs);
-    const startKey = start.toISOString().slice(0, 10);
-    const endKey = end.toISOString().slice(0, 10);
+    const startKey = localDateKey(start);
+    const endKey = localDateKey(end);
     const items = [];
     projects.forEach((project) => {
       const from = project.startDate || project.targetDate;
@@ -457,7 +459,7 @@ function ReactProjectRows({ project, expanded, members, onToggle, onNewTask, onE
       {project._tasks.length === 0 && <tr className="dash-task-row"><td colSpan="6"><span className="dash-no-tasks">No tasks in this project yet.</span><button type="button" className="dash-link-button" onClick={onNewTask}>Add the first task</button></td></tr>}
       {project._tasks.map((task) => <tr className="dash-task-row" key={task.id}>
         <td><span className="dash-task-id">TSK-{String(task.id).padStart(3, "0")}</span><span className="dash-task-title-cell">{task.title}</span></td>
-        <td><span className={task.dueDate && task.dueDate < new Date().toISOString().slice(0, 10) && String(task.status).toUpperCase() !== "DONE" ? "is-late" : ""}>{dateLabel(task.dueDate, { month: "short", day: "numeric", year: "numeric" })}</span></td>
+        <td><span className={task.dueDate && task.dueDate < todayKey() && String(task.status).toUpperCase() !== "DONE" ? "is-late" : ""}>{dateLabel(task.dueDate, { month: "short", day: "numeric", year: "numeric" })}</span></td>
         <td>{task.assignee ? <span className="dash-assignee-chip"><MemberStack members={[{ user: task.assignee }]} limit={1} /><span>{task.assignee.name}</span></span> : <span className="dash-no-members">Unassigned</span>}</td>
         <td><select className={"dash-inline-status status-" + String(task.status || "TODO").toLowerCase()} aria-label={"Status of " + task.title} value={String(task.status || "TODO").toUpperCase()} onChange={(event) => onUpdateTask(task, { status: event.target.value })}>{TASK_STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></td>
         <td><span className="dash-task-progress-label">{String(task.status).toUpperCase() === "DONE" ? "100%" : String(task.status).toUpperCase() === "IN_PROGRESS" ? "50%" : "0%"}</span></td>
