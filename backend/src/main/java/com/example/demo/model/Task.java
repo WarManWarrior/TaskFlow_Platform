@@ -17,6 +17,8 @@ public class Task {
     private AppUser user;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "team_id") @JsonIgnore
     private Team team;
+    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "project_id") @JsonIgnore
+    private Project project;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "updated_by_id") @JsonIgnore
     private AppUser updatedBy;
     @Column(name = "created_at") private LocalDateTime createdAt;
@@ -40,6 +42,8 @@ public class Task {
     public void setStatus(String status) { this.status = status; }
     public Team getTeam() { return team; }
     public void setTeam(Team team) { this.team = team; }
+    public Project getProject() { return project; }
+    public void setProject(Project project) { this.project = project; }
     public AppUser getUpdatedBy() { return updatedBy; }
     public void setUpdatedBy(AppUser updatedBy) { this.updatedBy = updatedBy; }
     public LocalDateTime getCreatedAt() { return createdAt; }
