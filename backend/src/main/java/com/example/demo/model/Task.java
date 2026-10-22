@@ -2,7 +2,10 @@ package com.example.demo.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "tasks")
@@ -23,6 +26,14 @@ public class Task {
     private AppUser updatedBy;
     @Column(name = "created_at") private LocalDateTime createdAt;
     @Column(name = "updated_at") private LocalDateTime updatedAt;
+    @Column(name = "start_date") private LocalDate startDate;
+    @Column(name = "due_date") private LocalDate dueDate;
+    @Column(name = "progress") private Integer progress = 0;
+    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "assignee_id") @JsonIgnore
+    private AppUser assignee;
+    @OneToMany(mappedBy = "task", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonIgnore
+    private List<TaskAttachment> attachments = new ArrayList<>();
     @PrePersist protected void onCreate() {
         LocalDateTime now = LocalDateTime.now();
         if (createdAt == null) createdAt = now;
@@ -48,6 +59,14 @@ public class Task {
     public void setUpdatedBy(AppUser updatedBy) { this.updatedBy = updatedBy; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public LocalDate getStartDate() { return startDate; }
+    public void setStartDate(LocalDate startDate) { this.startDate = startDate; }
+    public LocalDate getDueDate() { return dueDate; }
+    public void setDueDate(LocalDate dueDate) { this.dueDate = dueDate; }
+    public Integer getProgress() { return progress; }
+    public void setProgress(Integer progress) { this.progress = progress; }
+    public AppUser getAssignee() { return assignee; }
+    public void setAssignee(AppUser assignee) { this.assignee = assignee; }
     public AppUser getUser() { return user; }
     public void setUser(AppUser user) { this.user = user; }
 }
