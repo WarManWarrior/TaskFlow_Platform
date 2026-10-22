@@ -20,6 +20,13 @@ const dateLabel = (value, options = { month: "short", day: "numeric" }) => {
   return !parsed || Number.isNaN(parsed.getTime()) ? "Not set" : new Intl.DateTimeFormat("en", options).format(parsed);
 };
 const statusLabel = (value) => TASK_STATUSES.find((item) => item.value === String(value || "").toUpperCase())?.label || "To do";
+const taskProgress = (task) => {
+  const status = String(task.status || "TODO").toUpperCase();
+  if (status === "DONE") return 100;
+  const stored = Number(task.progress);
+  if (status === "IN_PROGRESS" && (!Number.isFinite(stored) || stored <= 0)) return 50;
+  return Math.max(0, Math.min(100, Number.isFinite(stored) ? stored : 0));
+};
 const dayMs = 86400000;
 const localDateKey = (value) => value.getFullYear() + "-" + String(value.getMonth() + 1).padStart(2, "0") + "-" + String(value.getDate()).padStart(2, "0");
 const todayKey = () => localDateKey(new Date());
@@ -126,7 +133,7 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
     const completed = tasks.filter((task) => String(task.status).toUpperCase() === "DONE").length;
     const inProgress = tasks.filter((task) => String(task.status).toUpperCase() === "IN_PROGRESS").length;
     const todo = tasks.filter((task) => String(task.status).toUpperCase() === "TODO").length;
-    const progress = tasks.length ? Math.round(completed / tasks.length * 100) : (project.status === "COMPLETED" ? 100 : 0);
+    const progress = tasks.length ? Math.round(tasks.reduce((total, task) => total + taskProgress(task), 0) / tasks.length) : (project.status === "COMPLETED" ? 100 : 0);
     const openTasks = tasks.filter((task) => String(task.status).toUpperCase() !== "DONE");
     const dueDates = openTasks.map((task) => task.dueDate).filter(Boolean).sort();
     const targetDate = project.targetDate || dueDates[0] || null;
@@ -145,7 +152,7 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
     progress: allTasks.filter((task) => String(task.status).toUpperCase() === "IN_PROGRESS").length,
     done: allTasks.filter((task) => String(task.status).toUpperCase() === "DONE").length,
   }), [allTasks]);
-  const overallProgress = allTasks.length ? Math.round(statusCounts.done / allTasks.length * 100) : 0;
+  const overallProgress = allTasks.length ? Math.round(allTasks.reduce((total, task) => total + taskProgress(task), 0) / allTasks.length) : 0;
   const activeProjects = projects.filter((project) => project.status === "ACTIVE").length;
   const completedProjects = projects.filter((project) => project.status === "COMPLETED").length;
   const overdueTasks = allTasks.filter((task) => task.dueDate && task.dueDate < todayKey() && String(task.status).toUpperCase() !== "DONE").length;
@@ -445,6 +452,16 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
   );
 }
 
+function TaskProgressEditor({ title, value, onSave }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value, title]);
+  return <span className="dash-progress-editor">
+    <input type="range" min="0" max="100" step="5" value={draft} aria-label={"Progress for " + title} onChange={(event) => setDraft(Number(event.target.value))} />
+    <strong>{draft}%</strong>
+    {draft !== value && <button type="button" className="dash-progress-save" onClick={() => onSave(draft)} aria-label={"Save progress for " + title}>✓</button>}
+  </span>;
+}
+
 function ReactProjectRows({ project, expanded, members, onToggle, onNewTask, onEditSchedule, onUpdateTask }) {
   return <>
     <tr className="dash-project-row">
@@ -462,7 +479,7 @@ function ReactProjectRows({ project, expanded, members, onToggle, onNewTask, onE
         <td><span className={task.dueDate && task.dueDate < todayKey() && String(task.status).toUpperCase() !== "DONE" ? "is-late" : ""}>{dateLabel(task.dueDate, { month: "short", day: "numeric", year: "numeric" })}</span></td>
         <td>{task.assignee ? <span className="dash-assignee-chip"><MemberStack members={[{ user: task.assignee }]} limit={1} /><span>{task.assignee.name}</span></span> : <span className="dash-no-members">Unassigned</span>}</td>
         <td><select className={"dash-inline-status status-" + String(task.status || "TODO").toLowerCase()} aria-label={"Status of " + task.title} value={String(task.status || "TODO").toUpperCase()} onChange={(event) => onUpdateTask(task, { status: event.target.value })}>{TASK_STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></td>
-        <td><span className="dash-task-progress-label">{String(task.status).toUpperCase() === "DONE" ? "100%" : String(task.status).toUpperCase() === "IN_PROGRESS" ? "50%" : "0%"}</span></td>
+        <td><TaskProgressEditor title={task.title} value={taskProgress(task)} onSave={(progress) => onUpdateTask(task, { progress, status: progress === 100 ? "DONE" : progress === 0 ? "TODO" : "IN_PROGRESS" })} /></td>
         <td><button className="dash-row-action" type="button" onClick={() => onEditSchedule(task)} title="Edit dates and assignee" aria-label={"Schedule " + task.title}>✎</button></td>
       </tr>)}
     </>}
