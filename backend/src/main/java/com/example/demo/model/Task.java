@@ -26,6 +26,7 @@ public class Task {
     @Column(name = "updated_at") private LocalDateTime updatedAt;
     @Column(name = "start_date") private LocalDate startDate;
     @Column(name = "due_date") private LocalDate dueDate;
+    @Column(name = "progress") private Integer progress = 0;
     @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "assignee_id") @JsonIgnore
     private AppUser assignee;
     @PrePersist protected void onCreate() {
@@ -57,6 +58,8 @@ public class Task {
     public void setStartDate(LocalDate startDate) { this.startDate = startDate; }
     public LocalDate getDueDate() { return dueDate; }
     public void setDueDate(LocalDate dueDate) { this.dueDate = dueDate; }
+    public Integer getProgress() { return progress; }
+    public void setProgress(Integer progress) { this.progress = progress; }
     public AppUser getAssignee() { return assignee; }
     public void setAssignee(AppUser assignee) { this.assignee = assignee; }
     public AppUser getUser() { return user; }
