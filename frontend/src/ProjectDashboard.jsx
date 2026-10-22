@@ -588,7 +588,7 @@ function ReactProjectRows({ project, expanded, members, onToggle, onNewTask, onE
         </div></td>
         <td>{task.assignee ? <span className="dash-assignee-chip"><MemberStack members={[{ user: task.assignee }]} limit={1} /><span>{task.assignee.name}</span></span> : <span className="dash-no-members">Unassigned</span>}</td>
         <td><select className={"dash-inline-status status-" + String(task.status || "TODO").toLowerCase()} aria-label={"Status of " + task.title} value={String(task.status || "TODO").toUpperCase()} onChange={(event) => onUpdateTask(task, { status: event.target.value })}>{TASK_STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></td>
-        <td><TaskProgressEditor title={task.title} value={taskProgress(task)} onSave={(progress) => onUpdateTask(task, { progress, status: progress === 100 ? "DONE" : progress === 0 ? "TODO" : "IN_PROGRESS" })} /></td>
+        <td><TaskProgressEditor title={task.title} value={taskProgress(task)} onSave={(progress) => onUpdateTask(task, { progress: String(progress), status: progress === 100 ? "DONE" : progress === 0 ? "TODO" : "IN_PROGRESS" })} /></td>
         <td><button className="dash-row-action" type="button" onClick={() => onEditSchedule(task)} title="Edit dates and assignee" aria-label={"Schedule " + task.title}>✎</button></td>
       </tr>)}
     </>}
