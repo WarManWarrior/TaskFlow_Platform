@@ -33,13 +33,16 @@ public class ProjectController {
     private final TeamRepository teams;
     private final TeamMemberRepository members;
     private final ProjectRepository projects;
+    private final com.example.demo.repository.TaskRepository tasks;
 
     public ProjectController(AppUserRepository users, TeamRepository teams,
-            TeamMemberRepository members, ProjectRepository projects) {
+            TeamMemberRepository members, ProjectRepository projects,
+            com.example.demo.repository.TaskRepository tasks) {
         this.users = users;
         this.teams = teams;
         this.members = members;
         this.projects = projects;
+        this.tasks = tasks;
     }
 
     @GetMapping
@@ -132,6 +135,10 @@ public class ProjectController {
     public ResponseEntity<Void> deleteProject(@PathVariable Long teamId, @PathVariable Long projectId,
             Authentication auth) {
         Project project = requireProject(teamId, projectId, currentUser(auth));
+        if (tasks.countByProject_Id(projectId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Move or remove this project's tasks before deleting the project.");
+        }
         projects.delete(project);
         return ResponseEntity.noContent().build();
     }

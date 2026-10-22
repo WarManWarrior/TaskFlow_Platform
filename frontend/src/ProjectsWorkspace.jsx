@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 const API = "/api";
 const PROJECT_STATUSES = [
@@ -69,84 +69,22 @@ const dateLabel = (value) => {
     : new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(parsed);
 };
 
-export default function ProjectsWorkspace({ notify = () => {}, onGoToTeams = () => {} }) {
-  const [teams, setTeams] = useState([]);
-  const [teamId, setTeamId] = useState("");
-  const [projects, setProjects] = useState([]);
-  const [loadingTeams, setLoadingTeams] = useState(true);
-  const [loadingProjects, setLoadingProjects] = useState(false);
+export default function ProjectsWorkspace({
+  notify = () => {},
+  teamId,
+  projects = [],
+  setProjects = () => {},
+  loadingProjects = false,
+  onRefresh = () => {},
+  onViewTasks = () => {},
+  taskCounts = {},
+}) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [form, setForm] = useState(emptyForm);
-
-  const activeTeam = useMemo(
-    () => teams.find((team) => String(team.id) === String(teamId)) || null,
-    [teams, teamId]
-  );
-
-  const loadTeams = useCallback(async () => {
-    setLoadingTeams(true);
-    setError("");
-    try {
-      const result = await request(API + "/teams");
-      const loaded = Array.isArray(result) ? result : [];
-      setTeams(loaded);
-      setTeamId((current) => (
-        current && loaded.some((team) => String(team.id) === String(current))
-          ? current
-          : String(loaded[0]?.id ?? "")
-      ));
-    } catch (e) {
-      setError(e.message || "Couldn't load your teams.");
-    } finally {
-      setLoadingTeams(false);
-    }
-  }, []);
-
-  useEffect(() => { loadTeams(); }, [loadTeams]);
-
-  const loadProjects = useCallback(async (selectedTeamId, silent = false) => {
-    if (!selectedTeamId) {
-      setProjects([]);
-      return;
-    }
-    if (!silent) setLoadingProjects(true);
-    setError("");
-    try {
-      const result = await request(API + "/teams/" + selectedTeamId + "/projects");
-      setProjects(Array.isArray(result) ? result : []);
-    } catch (e) {
-      setError(e.message || "Couldn't load projects for this team.");
-    } finally {
-      if (!silent) setLoadingProjects(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    setProjects([]);
-    if (!teamId) {
-      setLoadingProjects(false);
-      return undefined;
-    }
-    setLoadingProjects(true);
-    setError("");
-    request(API + "/teams/" + teamId + "/projects")
-      .then((result) => {
-        if (!cancelled) setProjects(Array.isArray(result) ? result : []);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e.message || "Couldn't load projects for this team.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingProjects(false);
-      });
-    return () => { cancelled = true; };
-  }, [teamId]);
-
   const visibleProjects = useMemo(() => {
     const query = search.trim().toLowerCase();
     return projects.filter((project) =>
@@ -235,19 +173,15 @@ export default function ProjectsWorkspace({ notify = () => {}, onGoToTeams = () 
     }
   }
 
-  if (loadingTeams) {
-    return <section className="projects-page"><div className="projects-loading"><span className="boot-spinner" /><p>Loading your teams…</p></div></section>;
-  }
-
   return (
     <section className="projects-page">
       <div className="projects-heading-row">
         <div>
           <div className="eyebrow"><span className="eyebrow-line" />PROJECT PLANNING</div>
-          <h1>Projects<span className="heading-period">.</span></h1>
-          <p className="page-subtitle">Turn a team's tasks into a plan with an owner, dates, and a clear status.</p>
+          <h2>Project portfolio<span className="heading-period">.</span></h2>
+          <p className="page-subtitle">Plan deliverables, track target dates, and keep each project's tasks together.</p>
         </div>
-        <button className="primary-button" type="button" onClick={openCreate} disabled={!activeTeam}>
+        <button className="primary-button" type="button" onClick={openCreate} disabled={!teamId}>
           <span aria-hidden="true">＋</span> New project
         </button>
       </div>
@@ -261,63 +195,49 @@ export default function ProjectsWorkspace({ notify = () => {}, onGoToTeams = () 
 
       {error && !formOpen && <div className="projects-error" role="alert">{error}</div>}
 
-      {teams.length > 0 ? (
-        <>
-          <div className="projects-toolbar">
-            <label className="projects-team-select">
-              <span>Team</span>
-              <select value={teamId} onChange={(event) => setTeamId(event.target.value)}>
-                {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
-              </select>
-            </label>
-            <label className="projects-search">
-              <span className="sr-only">Search projects</span>
-              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects…" />
-            </label>
-            <button className="secondary-button" type="button" onClick={() => loadProjects(teamId)} disabled={loadingProjects}>↻ Refresh</button>
-          </div>
-
-          {loadingProjects ? (
-            <div className="projects-empty"><span className="boot-spinner" /><p>Loading projects…</p></div>
-          ) : visibleProjects.length === 0 ? (
-            <div className="projects-empty">
-              <div className="projects-empty-icon">▦</div>
-              <h2>{search ? "No matching projects" : "Your team plan starts here"}</h2>
-              <p>{search ? "Try another keyword." : "Create a project to group related work, set a target date, and keep the team aligned."}</p>
-              {!search && <button className="primary-button" type="button" onClick={openCreate}>＋ Create first project</button>}
-            </div>
-          ) : (
-            <div className="projects-grid">
-              {visibleProjects.map((project) => (
-                <article className="project-card" key={project.id}>
-                  <div className="project-card-top">
-                    <span className={"project-status-badge status-" + String(project.status || "PLANNED").toLowerCase()}>{PROJECT_STATUSES.find((item) => item.value === project.status)?.label || project.status}</span>
-                    <span className="project-id">PRJ-{String(project.id).padStart(3, "0")}</span>
-                  </div>
-                  <h2>{project.name}</h2>
-                  <p className={"project-description" + (!project.description ? " muted" : "")}>{project.description || "No project description yet."}</p>
-                  <div className="project-dates">
-                    <div><span>Start</span><strong>{dateLabel(project.startDate)}</strong></div>
-                    <div><span>Target</span><strong>{dateLabel(project.targetDate)}</strong></div>
-                  </div>
-                  <div className="project-creator"><span>Created by</span><strong>{project.createdBy?.name || "Team member"}</strong></div>
-                  <div className="project-card-actions">
-                    <button className="secondary-button" type="button" onClick={() => openEdit(project)}>Edit project</button>
-                    <button className="project-delete-button" type="button" onClick={() => deleteProject(project)}>Delete</button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="projects-empty projects-no-team">
-          <div className="projects-empty-icon">◎</div>
-          <h2>Create or join a team first</h2>
-          <p>Projects belong to a team so every member can work from the same plan. Create a team or join one with its invite code.</p>
-          <button className="primary-button" type="button" onClick={onGoToTeams}>Open Teams</button>
+      <>
+        <div className="projects-toolbar">
+          <label className="projects-search">
+            <span className="sr-only">Search projects</span>
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects…" />
+          </label>
+          <button className="secondary-button" type="button" onClick={onRefresh} disabled={loadingProjects}>↻ Refresh</button>
         </div>
-      )}
+
+        {loadingProjects ? (
+          <div className="projects-empty"><span className="boot-spinner" /><p>Loading projects…</p></div>
+        ) : visibleProjects.length === 0 ? (
+          <div className="projects-empty">
+            <div className="projects-empty-icon">▦</div>
+            <h2>{search ? "No matching projects" : "Your team plan starts here"}</h2>
+            <p>{search ? "Try another keyword." : "Create a project to group related work, set a target date, and keep the team aligned."}</p>
+            {!search && <button className="primary-button" type="button" onClick={openCreate}>＋ Create first project</button>}
+          </div>
+        ) : (
+          <div className="projects-grid">
+            {visibleProjects.map((project) => (
+              <article className="project-card" key={project.id}>
+                <div className="project-card-top">
+                  <span className={"project-status-badge status-" + String(project.status || "PLANNED").toLowerCase()}>{PROJECT_STATUSES.find((item) => item.value === project.status)?.label || project.status}</span>
+                  <span className="project-id">PRJ-{String(project.id).padStart(3, "0")}</span>
+                </div>
+                <h3>{project.name}</h3>
+                <p className={"project-description" + (!project.description ? " muted" : "")}>{project.description || "No project description yet."}</p>
+                <div className="project-dates">
+                  <div><span>Start</span><strong>{dateLabel(project.startDate)}</strong></div>
+                  <div><span>Target</span><strong>{dateLabel(project.targetDate)}</strong></div>
+                </div>
+                <div className="project-creator"><span>Created by</span><strong>{project.createdBy?.name || "Team member"}</strong></div>
+                <div className="project-card-actions">
+                  <button className="secondary-button" type="button" onClick={() => onViewTasks(project.id)}>View tasks ({taskCounts[project.id] || 0})</button>
+                  <button className="secondary-button" type="button" onClick={() => openEdit(project)}>Edit</button>
+                  <button className="project-delete-button" type="button" disabled={(taskCounts[project.id] || 0) > 0} title={(taskCounts[project.id] || 0) > 0 ? "Move this project's tasks to another project or the unassigned list first." : "Delete project"} onClick={() => deleteProject(project)}>Delete</button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </>
 
       {formOpen && (
         <div className="projects-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setFormOpen(false); }}>
