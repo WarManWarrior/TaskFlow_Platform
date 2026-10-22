@@ -223,9 +223,13 @@ public class TeamController {
                 task.setStatus(nextProgress == 100 ? "DONE" : nextProgress == 0 ? "TODO" : "IN_PROGRESS");
             }
         } else if (statusProvided) {
-            if ("DONE".equals(task.getStatus())) task.setProgress(100);
-            else if ("TODO".equals(task.getStatus())) task.setProgress(0);
-            else if (task.getProgress() == null || task.getProgress() == 0) task.setProgress(50);
+            if ("DONE".equals(task.getStatus())) {
+                task.setProgress(100);
+            } else if ("TODO".equals(task.getStatus())) {
+                task.setProgress(0);
+            } else if (task.getProgress() == null || task.getProgress() <= 0 || task.getProgress() >= 100) {
+                task.setProgress(50);
+            }
         }
         task.setUpdatedBy(actor); task=tasks.save(task);
         if(statusProvided && !Objects.equals(oldStatus,task.getStatus())) {
