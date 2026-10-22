@@ -82,6 +82,8 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [expandedProjects, setExpandedProjects] = useState(() => new Set());
+  const [uploadingTaskIds, setUploadingTaskIds] = useState(() => new Set());
+  const [deletingAttachmentIds, setDeletingAttachmentIds] = useState(() => new Set());
   const [taskDialog, setTaskDialog] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -97,14 +99,22 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
       const teamResult = await request(API + "/teams");
       const teams = Array.isArray(teamResult) ? teamResult : [];
       const loaded = await Promise.all(teams.map(async (team) => {
-        const [projectResult, taskResult, memberResult] = await Promise.all([
+        const [projectResult, taskResult, memberResult, attachmentResult] = await Promise.all([
           request(API + "/teams/" + team.id + "/projects"),
           request(API + "/teams/" + team.id + "/tasks"),
           request(API + "/teams/" + team.id + "/members"),
+          request(API + "/teams/" + team.id + "/attachments"),
         ]);
         const members = Array.isArray(memberResult) ? memberResult : [];
-        const tasks = (Array.isArray(taskResult) ? taskResult : []).map((task) => ({ ...task, _teamId: team.id, _teamName: team.name, _members: members }));
-        return { team, projects: Array.isArray(projectResult) ? projectResult : [], tasks, members };
+        const attachments = Array.isArray(attachmentResult) ? attachmentResult : [];
+        const tasks = (Array.isArray(taskResult) ? taskResult : []).map((task) => ({
+          ...task,
+          _teamId: team.id,
+          _teamName: team.name,
+          _members: members,
+          _attachments: attachments.filter((file) => String(file.taskId) === String(task.id)),
+        }));
+        return { team, projects: Array.isArray(projectResult) ? projectResult : [], tasks, members, attachments };
       }));
       setWorkspaces(loaded);
       setTeamFilter((current) => current === "all" || loaded.some((item) => String(item.team.id) === String(current)) ? current : "all");
@@ -125,6 +135,7 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
     _teamName: workspace.team.name,
     _members: workspace.members,
     _tasks: workspace.tasks.filter((task) => String(task.projectId || "") === String(project.id)),
+    _attachments: workspace.attachments.filter((file) => workspace.tasks.some((task) => String(task.projectId || "") === String(project.id) && String(task.id) === String(file.taskId))),
   }))), [visibleWorkspaces]);
   const allTasks = useMemo(() => visibleWorkspaces.flatMap((workspace) => workspace.tasks), [visibleWorkspaces]);
 
@@ -290,6 +301,89 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
     }
   }
 
+  async function uploadAttachment(task, event) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    const supportedTypes = new Set([
+      "application/pdf", "image/png", "image/jpeg", "image/webp", "text/plain",
+      "application/msword", "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ]);
+    const extension = file.name.split(".").pop()?.toLowerCase() || "";
+    const mimeByExtension = {
+      pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+      webp: "image/webp", txt: "text/plain", doc: "application/msword",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      xls: "application/vnd.ms-excel",
+      xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    };
+    const contentType = file.type || mimeByExtension[extension] || "";
+    if (!supportedTypes.has(contentType) || !mimeByExtension[extension]) {
+      notify("Choose a PDF, image, text, Word, Excel, or PowerPoint file.", "error");
+      return;
+    }
+    if (file.size < 1 || file.size > 1024 * 1024) {
+      notify("Source files must be 1 MB or smaller.", "error");
+      return;
+    }
+    const teamId = task._teamId || task.teamId;
+    setUploadingTaskIds((current) => new Set(current).add(task.id));
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Couldn't read that file."));
+        reader.onerror = () => reject(new Error("Couldn't read that file."));
+        reader.readAsDataURL(file);
+      });
+      const data = String(dataUrl).split(",")[1];
+      const saved = await request(API + "/teams/" + teamId + "/tasks/" + task.id + "/attachments", {
+        method: "POST",
+        body: { fileName: file.name, contentType, data },
+      });
+      setWorkspaces((current) => current.map((workspace) => String(workspace.team.id) === String(teamId) ? {
+        ...workspace,
+        attachments: [...workspace.attachments.filter((item) => String(item.id) !== String(saved.id)), saved],
+        tasks: workspace.tasks.map((item) => String(item.id) === String(task.id) ? { ...item, _attachments: [...(item._attachments || []).filter((attachment) => String(attachment.id) !== String(saved.id)), saved] } : item),
+      } : workspace));
+      notify("Source file attached.");
+    } catch (e) {
+      notify(e.message || "Couldn't attach that file.", "error");
+    } finally {
+      setUploadingTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(task.id);
+        return next;
+      });
+    }
+  }
+
+  async function deleteAttachment(task, attachment) {
+    const teamId = task._teamId || task.teamId;
+    setDeletingAttachmentIds((current) => new Set(current).add(attachment.id));
+    try {
+      await request(API + "/teams/" + teamId + "/tasks/" + task.id + "/attachments/" + attachment.id, { method: "DELETE" });
+      setWorkspaces((current) => current.map((workspace) => String(workspace.team.id) === String(teamId) ? {
+        ...workspace,
+        attachments: workspace.attachments.filter((item) => String(item.id) !== String(attachment.id)),
+        tasks: workspace.tasks.map((item) => String(item.id) === String(task.id) ? { ...item, _attachments: (item._attachments || []).filter((file) => String(file.id) !== String(attachment.id)) } : item),
+      } : workspace));
+      notify("Source file removed.");
+    } catch (e) {
+      notify(e.message || "Couldn't remove that file.", "error");
+    } finally {
+      setDeletingAttachmentIds((current) => {
+        const next = new Set(current);
+        next.delete(attachment.id);
+        return next;
+      });
+    }
+  }
+
   function toggleProject(projectId) {
     setExpandedProjects((current) => {
       const next = new Set(current);
@@ -406,9 +500,9 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
           <section className="dash-panel dash-list-panel" id="dash-project-list">
             <div className="dash-panel-title dash-list-heading"><span className="dash-panel-icon">☷</span><div><h2>Project list</h2><p>Expand a project to manage its tasks, dates, assignees, and status.</p></div><button className="primary-button" type="button" onClick={onOpenProjects}>Manage projects <span>↗</span></button></div>
             <div className="dash-table-scroll"><table className="dash-project-table">
-              <thead><tr><th className="dash-project-col">Project / task</th><th>Target / due date</th><th>Team</th><th>Status</th><th>Progress</th><th aria-label="Actions" /></tr></thead>
+              <thead><tr><th className="dash-project-col">Project / task</th><th>Target / due date</th><th>Source files</th><th>Team</th><th>Status</th><th>Progress</th><th aria-label="Actions" /></tr></thead>
               <tbody>
-                {projects.length === 0 && <tr><td colSpan="6" className="dash-table-empty">No projects here yet. Use Manage projects to create one.</td></tr>}
+                {projects.length === 0 && <tr><td colSpan="7" className="dash-table-empty">No projects here yet. Use Manage projects to create one.</td></tr>}
                 {projects.map((project) => {
                   const expanded = expandedProjects.has(project.id);
                   return <ReactProjectRows
@@ -420,6 +514,10 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
                     onNewTask={() => openNewTask(project)}
                     onEditSchedule={openSchedule}
                     onUpdateTask={updateTask}
+                    onUploadAttachment={uploadAttachment}
+                    onDeleteAttachment={deleteAttachment}
+                    uploadingTaskIds={uploadingTaskIds}
+                    deletingAttachmentIds={deletingAttachmentIds}
                   />;
                 })}
               </tbody>
@@ -462,21 +560,32 @@ function TaskProgressEditor({ title, value, onSave }) {
   </span>;
 }
 
-function ReactProjectRows({ project, expanded, members, onToggle, onNewTask, onEditSchedule, onUpdateTask }) {
+function ReactProjectRows({ project, expanded, members, onToggle, onNewTask, onEditSchedule, onUpdateTask, onUploadAttachment, onDeleteAttachment, uploadingTaskIds, deletingAttachmentIds }) {
   return <>
     <tr className="dash-project-row">
       <td><button className={"dash-expand-button" + (expanded ? " expanded" : "")} type="button" aria-expanded={expanded} onClick={onToggle}><span>›</span></button><span className={"dash-project-swatch swatch-" + String(project.status || "PLANNED").toLowerCase()} /><span className="dash-project-name-cell"><strong>{project.name}</strong><small>{project._teamName} · PRJ-{String(project.id).padStart(3, "0")}</small></span></td>
       <td><strong className={project.overdue ? "is-late" : ""}>{dateLabel(project.targetDate, { month: "short", day: "numeric", year: "numeric" })}</strong>{project.overdue && <small className="dash-late-label">Past target</small>}</td>
+      <td><span className="dash-file-summary">{project._attachments.length ? <><strong>{project._attachments.length}</strong> {project._attachments.length === 1 ? "file" : "files"}</> : <span>—</span>}</span></td>
       <td><MemberStack members={members} /></td>
       <td><span className={"dash-project-status status-" + String(project.status || "PLANNED").toLowerCase()}><i />{PROJECT_STATUSES[project.status] || project.status}</span></td>
       <td><span className="dash-progress-cell"><span className="dash-mini-track"><i style={{ width: project.progress + "%" }} /></span><strong>{project.progress}%</strong></span></td>
       <td><button className="dash-row-action" type="button" onClick={onNewTask} title="Add task to this project" aria-label={"Add task to " + project.name}>＋</button></td>
     </tr>
     {expanded && <>
-      {project._tasks.length === 0 && <tr className="dash-task-row"><td colSpan="6"><span className="dash-no-tasks">No tasks in this project yet.</span><button type="button" className="dash-link-button" onClick={onNewTask}>Add the first task</button></td></tr>}
+      {project._tasks.length === 0 && <tr className="dash-task-row"><td colSpan="7"><span className="dash-no-tasks">No tasks in this project yet.</span><button type="button" className="dash-link-button" onClick={onNewTask}>Add the first task</button></td></tr>}
       {project._tasks.map((task) => <tr className="dash-task-row" key={task.id}>
         <td><span className="dash-task-id">TSK-{String(task.id).padStart(3, "0")}</span><span className="dash-task-title-cell">{task.title}</span></td>
         <td><span className={task.dueDate && task.dueDate < todayKey() && String(task.status).toUpperCase() !== "DONE" ? "is-late" : ""}>{dateLabel(task.dueDate, { month: "short", day: "numeric", year: "numeric" })}</span></td>
+        <td><div className="dash-task-files">
+          {(task._attachments || []).map((file) => <span className="dash-file-entry" key={file.id}>
+            <a className="dash-file-link" href={file.url} title={file.fileName} download><span className="dash-file-icon">{String(file.fileName || "").split(".").pop().slice(0, 4).toUpperCase()}</span><span>{file.fileName}</span></a>
+            <button type="button" className="dash-file-delete" disabled={deletingAttachmentIds.has(file.id)} title={"Remove " + file.fileName} aria-label={"Remove " + file.fileName} onClick={() => onDeleteAttachment(task, file)}>×</button>
+          </span>)}
+          <label className={"dash-file-upload" + (uploadingTaskIds.has(task.id) ? " is-uploading" : "")} title="Attach source file" aria-label={"Attach source file to " + task.title}>
+            {uploadingTaskIds.has(task.id) ? "…" : "+"}
+            <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx,.xls,.xlsx,.pptx" disabled={uploadingTaskIds.has(task.id)} onChange={(event) => onUploadAttachment(task, event)} />
+          </label>
+        </div></td>
         <td>{task.assignee ? <span className="dash-assignee-chip"><MemberStack members={[{ user: task.assignee }]} limit={1} /><span>{task.assignee.name}</span></span> : <span className="dash-no-members">Unassigned</span>}</td>
         <td><select className={"dash-inline-status status-" + String(task.status || "TODO").toLowerCase()} aria-label={"Status of " + task.title} value={String(task.status || "TODO").toUpperCase()} onChange={(event) => onUpdateTask(task, { status: event.target.value })}>{TASK_STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></td>
         <td><TaskProgressEditor title={task.title} value={taskProgress(task)} onSave={(progress) => onUpdateTask(task, { progress, status: progress === 100 ? "DONE" : progress === 0 ? "TODO" : "IN_PROGRESS" })} /></td>
