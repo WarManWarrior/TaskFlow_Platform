@@ -13,6 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import java.security.SecureRandom;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -92,6 +94,10 @@ public class TeamController {
         if(description.length()>1000) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Description must be 1000 characters or fewer.");
         Task task=new Task(title,description,"TODO"); task.setTeam(team); task.setUser(actor); task.setUpdatedBy(actor);
         task.setProject(resolveProject(teamId, body.get("projectId")));
+        task.setStartDate(parseDate(body.get("startDate"), "startDate"));
+        task.setDueDate(parseDate(body.get("dueDate"), "dueDate"));
+        validateTaskDates(task.getStartDate(), task.getDueDate());
+        task.setAssignee(resolveAssignee(teamId, body.get("assigneeId")));
         task=tasks.save(task);
         String detail = task.getProject() == null ? "created this shared task" : "created a task in project " + task.getProject().getName();
         activities.save(new TaskActivity(task,actor,"TASK_CREATED",detail)); return taskMap(task);
@@ -102,7 +108,11 @@ public class TeamController {
         Task task=tasks.findByIdAndTeam_Id(taskId,teamId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,"Team task not found."));
         boolean statusProvided=body.containsKey("status");
         boolean projectProvided=body.containsKey("projectId");
-        if(!statusProvided && !projectProvided) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Provide a status or project assignment to update.");
+        boolean startDateProvided=body.containsKey("startDate");
+        boolean dueDateProvided=body.containsKey("dueDate");
+        boolean assigneeProvided=body.containsKey("assigneeId");
+        if(!statusProvided && !projectProvided && !startDateProvided && !dueDateProvided && !assigneeProvided)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Provide a task field to update.");
         String oldStatus=task.getStatus();
         Long oldProjectId=task.getProject()==null?null:task.getProject().getId();
         if(statusProvided) {
@@ -111,6 +121,10 @@ public class TeamController {
             task.setStatus(next);
         }
         if(projectProvided) task.setProject(resolveProject(teamId,body.get("projectId")));
+        if(startDateProvided) task.setStartDate(parseDate(body.get("startDate"), "startDate"));
+        if(dueDateProvided) task.setDueDate(parseDate(body.get("dueDate"), "dueDate"));
+        validateTaskDates(task.getStartDate(), task.getDueDate());
+        if(assigneeProvided) task.setAssignee(resolveAssignee(teamId, body.get("assigneeId")));
         task.setUpdatedBy(actor); task=tasks.save(task);
         if(statusProvided && !Objects.equals(oldStatus,task.getStatus())) {
             activities.save(new TaskActivity(task,actor,"STATUS_CHANGED","moved this task from "+statusLabel(oldStatus)+" to "+statusLabel(task.getStatus())));
@@ -258,6 +272,28 @@ public class TeamController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Choose a valid project.");
         }
     }
+    private AppUser resolveAssignee(Long teamId, String rawAssigneeId) {
+        if (rawAssigneeId == null || rawAssigneeId.isBlank()) return null;
+        try {
+            Long userId = Long.valueOf(rawAssigneeId.trim());
+            return members.findByTeam_IdAndUser_Id(teamId, userId).map(TeamMember::getUser)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Choose a member of this team as the assignee."));
+        } catch (NumberFormatException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a valid assignee.");
+        }
+    }
+    private LocalDate parseDate(String raw, String field) {
+        if (raw == null || raw.isBlank()) return null;
+        try { return LocalDate.parse(raw.trim()); }
+        catch (DateTimeParseException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + " must be a valid date.");
+        }
+    }
+    private void validateTaskDates(LocalDate start, LocalDate due) {
+        if (start != null && due != null && start.isAfter(due))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Task start date must be on or before its due date.");
+    }
     private AppUser currentUser(Authentication auth) {
         if(auth==null||auth.getName()==null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Please sign in.");
         return users.findByEmailIgnoreCase(auth.getName()).orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED,"Account not found."));
@@ -274,6 +310,9 @@ public class TeamController {
         m.put("createdBy",userMap(t.getUser())); m.put("updatedBy",userMap(t.getUpdatedBy())); m.put("teamId",t.getTeam()==null?null:t.getTeam().getId());
         m.put("projectId",t.getProject()==null?null:t.getProject().getId());
         m.put("projectName",t.getProject()==null?null:t.getProject().getName());
+        m.put("startDate", t.getStartDate() == null ? null : t.getStartDate().toString());
+        m.put("dueDate", t.getDueDate() == null ? null : t.getDueDate().toString());
+        m.put("assignee", userMap(t.getAssignee()));
         return m;
     }
     private Map<String,Object> userMap(AppUser u) {
