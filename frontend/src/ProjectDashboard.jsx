@@ -110,7 +110,6 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
   useEffect(() => { loadData(); }, [loadData]);
 
   const visibleWorkspaces = useMemo(() => teamFilter === "all" ? workspaces : workspaces.filter((workspace) => String(workspace.team.id) === String(teamFilter)), [workspaces, teamFilter]);
-  const visibleTeamIds = useMemo(() => new Set(visibleWorkspaces.map((workspace) => String(workspace.team.id))), [visibleWorkspaces]);
   const allProjects = useMemo(() => visibleWorkspaces.flatMap((workspace) => workspace.projects.map((project) => ({
     ...project,
     _teamId: workspace.team.id,
@@ -289,12 +288,6 @@ function ProjectDashboard({ notify = () => {}, onOpenProjects = () => {} }) {
       else next.add(projectId);
       return next;
     });
-  }
-  function percentPosition(value) {
-    const itemDate = dateValue(value);
-    const rangeDays = Math.max(1, Math.round((timeline.end.getTime() - timeline.start.getTime()) / dayMs) + 1);
-    const offset = (itemDate.getTime() - timeline.start.getTime()) / dayMs;
-    return Math.max(0, Math.min(100, offset / rangeDays * 100));
   }
   function percentWidth(from, to) {
     const fromDate = dateValue(from);
